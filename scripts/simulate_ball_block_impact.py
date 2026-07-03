@@ -26,6 +26,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ball-restitution", type=float, default=0.78)
     parser.add_argument("--block-friction", type=float, default=0.32)
     parser.add_argument("--block-restitution", type=float, default=0.55)
+    parser.add_argument("--ramp-enabled", action="store_true")
+    parser.add_argument("--ramp-location", nargs=3, type=float, default=(-0.35, 0.0, 0.77))
+    parser.add_argument("--ramp-dimensions", nargs=3, type=float, default=(2.5, 1.1, 0.08))
+    parser.add_argument("--ramp-pitch-deg", type=float, default=18.0)
+    parser.add_argument("--ramp-friction", type=float, default=0.56)
+    parser.add_argument("--ramp-restitution", type=float, default=0.06)
     return parser.parse_args()
 
 
@@ -66,6 +72,12 @@ def simulate(args: argparse.Namespace) -> dict:
     block_yaw = math.radians(float(args.block_yaw_deg))
     block_orientation = p.getQuaternionFromEuler((0.0, 0.0, block_yaw))
     ball_initial_velocity = tuple(float(value) for value in args.ball_initial_velocity)
+    ramp_enabled = bool(args.ramp_enabled)
+    ramp_location = tuple(float(value) for value in args.ramp_location)
+    ramp_dimensions = tuple(float(value) for value in args.ramp_dimensions)
+    ramp_half_extents = tuple(0.5 * value for value in ramp_dimensions)
+    ramp_pitch = math.radians(float(args.ramp_pitch_deg))
+    ramp_orientation = p.getQuaternionFromEuler((0.0, ramp_pitch, 0.0))
 
     client = p.connect(p.DIRECT)
     try:
@@ -89,6 +101,29 @@ def simulate(args: argparse.Namespace) -> dict:
             restitution=0.0,
             physicsClientId=client,
         )
+
+        ramp_id = None
+        if ramp_enabled:
+            ramp_shape = p.createCollisionShape(
+                p.GEOM_BOX,
+                halfExtents=ramp_half_extents,
+                physicsClientId=client,
+            )
+            ramp_id = p.createMultiBody(
+                baseMass=0.0,
+                baseCollisionShapeIndex=ramp_shape,
+                baseVisualShapeIndex=-1,
+                basePosition=ramp_location,
+                baseOrientation=ramp_orientation,
+                physicsClientId=client,
+            )
+            p.changeDynamics(
+                ramp_id,
+                -1,
+                lateralFriction=float(args.ramp_friction),
+                restitution=float(args.ramp_restitution),
+                physicsClientId=client,
+            )
 
         block_shape = p.createCollisionShape(
             p.GEOM_BOX,
@@ -149,6 +184,7 @@ def simulate(args: argparse.Namespace) -> dict:
         frames = []
         min_ball_block_gap = float("inf")
         min_ball_floor_gap = float("inf")
+        min_ball_ramp_gap = float("inf")
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
@@ -161,8 +197,19 @@ def simulate(args: argparse.Namespace) -> dict:
 
             ball_floor_gap = ball_pos[2] - radius
             ball_block_gap = sphere_box_gap(ball_pos, radius, block_pos, block_quat, block_half_extents)
+            ball_ramp_gap = None
+            if ramp_enabled:
+                ball_ramp_gap = sphere_box_gap(
+                    ball_pos,
+                    radius,
+                    ramp_location,
+                    ramp_orientation,
+                    ramp_half_extents,
+                )
             min_ball_floor_gap = min(min_ball_floor_gap, ball_floor_gap)
             min_ball_block_gap = min(min_ball_block_gap, ball_block_gap)
+            if ball_ramp_gap is not None:
+                min_ball_ramp_gap = min(min_ball_ramp_gap, ball_ramp_gap)
 
             frames.append(
                 {
@@ -178,6 +225,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "wood_block_angular_velocity": list(block_ang),
                     "ball_floor_gap": ball_floor_gap,
                     "ball_block_gap": ball_block_gap,
+                    "ball_ramp_gap": ball_ramp_gap,
                 }
             )
 
@@ -210,10 +258,19 @@ def simulate(args: argparse.Namespace) -> dict:
                 "floor": {
                     "friction": float(args.floor_friction),
                 },
+                "ramp": {
+                    "enabled": ramp_enabled,
+                    "dimensions": list(ramp_dimensions),
+                    "initial_location": list(ramp_location),
+                    "pitch_deg": float(args.ramp_pitch_deg),
+                    "friction": float(args.ramp_friction),
+                    "restitution": float(args.ramp_restitution),
+                },
             },
             "quality": {
                 "min_ball_floor_gap": min_ball_floor_gap,
                 "min_ball_block_gap": min_ball_block_gap,
+                "min_ball_ramp_gap": min_ball_ramp_gap if ramp_enabled else None,
             },
             "frames": frames,
         }

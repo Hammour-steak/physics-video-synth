@@ -166,6 +166,36 @@ NEW_CASES = (
             },
         },
     ),
+    RenderCase(
+        case_id="incline_slide_falloff",
+        description="Ball slides down a finite incline, leaves the edge, and lands on the floor.",
+        seed=3301,
+        motion="incline_slide_falloff",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "incline_slide_falloff",
+            "physics": {
+                "motion": "incline_slide_falloff",
+                "ball_initial_location": [-1.1059, -0.01, 1.4081],
+                "ball_initial_velocity": [0.46, 0.0, -0.02],
+                "block_location": [0.20, 1.05, 0.35],
+                "block_yaw_deg": 0.0,
+                "ball_mass": 0.58,
+                "block_mass": 0.68,
+                "floor_friction": 0.82,
+                "ball_friction": 0.36,
+                "ball_restitution": 0.48,
+                "block_friction": 0.35,
+                "block_restitution": 0.52,
+                "ramp_enabled": True,
+                "ramp_location": [-0.35, 0.0, 0.77],
+                "ramp_dimensions": [2.5, 1.1, 0.08],
+                "ramp_pitch_deg": 18.0,
+                "ramp_friction": 0.58,
+                "ramp_restitution": 0.05,
+            },
+        },
+    ),
 )
 
 

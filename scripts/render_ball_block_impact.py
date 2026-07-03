@@ -34,8 +34,11 @@ SIDE_IMPACT_BALL_INITIAL_XY = (-3.15, -0.12)
 WOOD_BLOCK_LOCATION = (0.23, -0.02, 0.35)
 WOOD_BLOCK_DIMENSIONS = (0.92, 0.58, 0.70)
 REALISM_PROFILE = "enhanced"
-MOTION_CHOICES = ("side_impact", "drop_onto_block")
+MOTION_CHOICES = ("side_impact", "drop_onto_block", "incline_slide_falloff")
 DEFAULT_BLOCK_TEXTURE_ASSET = "wood_table"
+INCLINE_RAMP_LOCATION = (-0.35, 0.0, 0.77)
+INCLINE_RAMP_DIMENSIONS = (2.5, 1.1, 0.08)
+INCLINE_RAMP_PITCH_DEG = 18.0
 
 CAMERA_LOCATION = (3.9, -5.7, 2.35)
 CAMERA_TARGET = (0.05, -0.05, 0.45)
@@ -235,6 +238,57 @@ def create_drop_onto_block_motion(
     )
 
 
+def ramp_top_ball_center(
+    *,
+    local_x: float,
+    local_y: float,
+    radius: float,
+    location: tuple[float, float, float],
+    dimensions: tuple[float, float, float],
+    pitch_deg: float,
+) -> tuple[float, float, float]:
+    pitch = math.radians(float(pitch_deg))
+    half_thickness = 0.5 * float(dimensions[2])
+    cos_pitch = math.cos(pitch)
+    sin_pitch = math.sin(pitch)
+    surface_point = (
+        location[0] + cos_pitch * local_x + sin_pitch * half_thickness,
+        location[1] + local_y,
+        location[2] - sin_pitch * local_x + cos_pitch * half_thickness,
+    )
+    normal = (sin_pitch, 0.0, cos_pitch)
+    return (
+        surface_point[0] + radius * normal[0],
+        surface_point[1] + radius * normal[1],
+        surface_point[2] + radius * normal[2],
+    )
+
+
+def create_incline_slide_falloff_motion(
+    rng: random.Random,
+    jitter: float,
+) -> MotionSetup:
+    local_x = -0.92 + rng.uniform(-0.04, 0.04) * jitter
+    local_y = rng.uniform(-0.05, 0.05) * jitter
+    ball_initial_location = ramp_top_ball_center(
+        local_x=local_x,
+        local_y=local_y,
+        radius=BALL_RADIUS,
+        location=INCLINE_RAMP_LOCATION,
+        dimensions=INCLINE_RAMP_DIMENSIONS,
+        pitch_deg=INCLINE_RAMP_PITCH_DEG,
+    )
+    ball_initial_velocity = (
+        0.46 + rng.uniform(-0.05, 0.05) * jitter,
+        rng.uniform(-0.03, 0.03) * jitter,
+        -0.02,
+    )
+    return MotionSetup(
+        ball_initial_location=ball_initial_location,
+        ball_initial_velocity=ball_initial_velocity,
+    )
+
+
 def create_side_impact_camera(rng: random.Random) -> dict[str, object]:
     base_location = [
         CAMERA_LOCATION[0] + rng.uniform(-0.18, 0.16),
@@ -280,6 +334,27 @@ def create_drop_onto_block_camera(
     }
 
 
+def create_incline_slide_falloff_camera(rng: random.Random) -> dict[str, object]:
+    base_location = [
+        3.10 + rng.uniform(-0.08, 0.10),
+        -4.80 + rng.uniform(-0.12, 0.10),
+        2.15 + rng.uniform(-0.05, 0.07),
+    ]
+    target = [
+        -0.25 + rng.uniform(-0.04, 0.04),
+        0.00 + rng.uniform(-0.04, 0.04),
+        0.82 + rng.uniform(-0.03, 0.03),
+    ]
+    return {
+        "base_location": base_location,
+        "target": target,
+        "lens_mm": 43.0 + rng.uniform(-1.5, 1.5),
+        "sensor_width_mm": 32.0,
+        "focus_distance": math.dist(base_location, target) + rng.uniform(-0.05, 0.05),
+        "aperture_fstop": 7.4 + rng.uniform(-0.3, 0.5),
+    }
+
+
 def create_scenario(args: argparse.Namespace) -> dict[str, object]:
     seed = int(args.seed)
     rng = random.Random(seed)
@@ -297,6 +372,10 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
     elif motion == "drop_onto_block":
         motion_settings = create_drop_onto_block_motion(args, rng, jitter, block_location)
         camera_settings = create_drop_onto_block_camera(rng, block_location)
+    elif motion == "incline_slide_falloff":
+        block_location = (0.20, 1.05, WOOD_BLOCK_LOCATION[2])
+        motion_settings = create_incline_slide_falloff_motion(rng, jitter)
+        camera_settings = create_incline_slide_falloff_camera(rng)
     else:
         raise ValueError(f"Unsupported motion: {motion}")
 
@@ -337,6 +416,12 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "ball_restitution": 0.78 + rng.uniform(-0.06, 0.04) * jitter,
             "block_friction": 0.32 + rng.uniform(-0.05, 0.07) * jitter,
             "block_restitution": 0.55 + rng.uniform(-0.06, 0.05) * jitter,
+            "ramp_enabled": motion == "incline_slide_falloff",
+            "ramp_location": list(INCLINE_RAMP_LOCATION),
+            "ramp_dimensions": list(INCLINE_RAMP_DIMENSIONS),
+            "ramp_pitch_deg": INCLINE_RAMP_PITCH_DEG,
+            "ramp_friction": 0.58,
+            "ramp_restitution": 0.05,
         },
         "render": {
             "exposure": rng.uniform(-0.08, 0.05),
@@ -375,6 +460,7 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "wall_color": list(jittered_color(rng, (0.70, 0.66, 0.60, 1.0), 0.035)),
             "baseboard_color": list(jittered_color(rng, (0.78, 0.74, 0.68, 1.0), 0.025)),
             "ball_base_color": list(jittered_color(rng, (0.72, 0.075, 0.025, 1.0), 0.035)),
+            "ramp_color": list(jittered_color(rng, (0.54, 0.42, 0.30, 1.0), 0.030)),
         },
         "ball_scuffs": extra_scuffs,
     }
@@ -1032,9 +1118,14 @@ def add_box(
     material: bpy.types.Material,
     *,
     rotation_z: float = 0.0,
+    rotation_euler: tuple[float, float, float] | None = None,
     bevel_width: float = 0.0,
 ) -> bpy.types.Object:
-    bpy.ops.mesh.primitive_cube_add(size=1.0, location=location, rotation=(0.0, 0.0, rotation_z))
+    bpy.ops.mesh.primitive_cube_add(
+        size=1.0,
+        location=location,
+        rotation=rotation_euler if rotation_euler is not None else (0.0, 0.0, rotation_z),
+    )
     obj = bpy.context.object
     obj.name = name
     obj.dimensions = dimensions
@@ -1163,6 +1254,7 @@ def add_environment(scenario: dict[str, object]) -> None:
     floor = bpy.context.object
     floor.name = "warm_hardwood_room_floor"
     floor.data.materials.append(floor_mat)
+    add_incline_ramp(scenario)
     add_room_shell(scenario)
     add_floor_details(scenario)
     add_background_clutter(scenario)
@@ -1193,6 +1285,68 @@ def add_environment(scenario: dict[str, object]) -> None:
         (0.0, 0.25, 0.75),
         tuple(float(value) for value in lighting.get("fill_color", (0.82, 0.86, 0.90, 1.0))),
     )
+
+
+def ramp_surface_metadata(scenario: dict[str, object]) -> dict[str, object] | None:
+    physics = scenario.get("physics")
+    if not isinstance(physics, dict) or not bool(physics.get("ramp_enabled", False)):
+        return None
+    location = tuple(float(value) for value in physics["ramp_location"])
+    dimensions = tuple(float(value) for value in physics["ramp_dimensions"])
+    pitch_deg = float(physics["ramp_pitch_deg"])
+    pitch = math.radians(pitch_deg)
+    half_length = 0.5 * dimensions[0]
+    half_width = 0.5 * dimensions[1]
+    half_thickness = 0.5 * dimensions[2]
+    cos_pitch = math.cos(pitch)
+    sin_pitch = math.sin(pitch)
+    normal = (sin_pitch, 0.0, cos_pitch)
+    origin = (
+        location[0] + sin_pitch * half_thickness,
+        location[1],
+        location[2] + cos_pitch * half_thickness,
+    )
+    plane_d = -sum(a * b for a, b in zip(normal, origin))
+    axis_u = (cos_pitch, 0.0, -sin_pitch)
+    axis_v = (0.0, 1.0, 0.0)
+    return {
+        "name": "incline_ramp_top",
+        "surface_role": "sloped_support",
+        "plane_model": [normal[0], normal[1], normal[2], plane_d],
+        "plane_origin": list(origin),
+        "plane_axis_u": list(axis_u),
+        "plane_axis_v": list(axis_v),
+        "extent_uv": [[-half_length, -half_width], [half_length, half_width]],
+        "pitch_deg": pitch_deg,
+        "dimensions": list(dimensions),
+    }
+
+
+def add_incline_ramp(scenario: dict[str, object]) -> bpy.types.Object | None:
+    surface = ramp_surface_metadata(scenario)
+    if surface is None:
+        return None
+    physics = scenario["physics"]
+    assert isinstance(physics, dict)
+    location = tuple(float(value) for value in physics["ramp_location"])
+    dimensions = tuple(float(value) for value in physics["ramp_dimensions"])
+    pitch = math.radians(float(physics["ramp_pitch_deg"]))
+    mat = create_principled_material(
+        "matte worn plywood incline ramp",
+        scenario_color(scenario, "ramp_color", (0.54, 0.42, 0.30, 1.0)),
+        roughness=0.78,
+        noise_bump=0.018,
+    )
+    ramp = add_box(
+        "finite_incline_ramp",
+        location,
+        dimensions,
+        mat,
+        rotation_euler=(0.0, pitch, 0.0),
+        bevel_width=0.006,
+    )
+    cube_project_uvs(ramp, cube_size=1.0)
+    return ramp
 
 
 def create_rubber_ball_material(scenario: dict[str, object]) -> bpy.types.Material:
@@ -1551,6 +1705,21 @@ def run_physics_simulation(
             str(float(physics["block_friction"])),
             "--block-restitution",
             str(float(physics["block_restitution"])),
+            *(["--ramp-enabled"] if bool(physics.get("ramp_enabled", False)) else []),
+            "--ramp-location",
+            str(float(physics.get("ramp_location", INCLINE_RAMP_LOCATION)[0])),
+            str(float(physics.get("ramp_location", INCLINE_RAMP_LOCATION)[1])),
+            str(float(physics.get("ramp_location", INCLINE_RAMP_LOCATION)[2])),
+            "--ramp-dimensions",
+            str(float(physics.get("ramp_dimensions", INCLINE_RAMP_DIMENSIONS)[0])),
+            str(float(physics.get("ramp_dimensions", INCLINE_RAMP_DIMENSIONS)[1])),
+            str(float(physics.get("ramp_dimensions", INCLINE_RAMP_DIMENSIONS)[2])),
+            "--ramp-pitch-deg",
+            str(float(physics.get("ramp_pitch_deg", INCLINE_RAMP_PITCH_DEG))),
+            "--ramp-friction",
+            str(float(physics.get("ramp_friction", 0.58))),
+            "--ramp-restitution",
+            str(float(physics.get("ramp_restitution", 0.05))),
         ],
         check=True,
     )
@@ -1599,6 +1768,10 @@ def export_ground_truth(
     scenario: dict[str, object],
 ) -> None:
     scene = bpy.context.scene
+    static_scene_surfaces = []
+    ramp_surface = ramp_surface_metadata(scenario)
+    if ramp_surface is not None:
+        static_scene_surfaces.append(ramp_surface)
     records = {
         "schema_version": 1,
         "fps": int(fps),
@@ -1634,6 +1807,7 @@ def export_ground_truth(
             "realism_profile": scenario["realism_profile"],
             "motion": scenario["motion"],
         },
+        "static_scene_surfaces": static_scene_surfaces,
         "frames": [],
     }
     physics_by_frame = {
@@ -1662,6 +1836,7 @@ def export_ground_truth(
                 "wood_block_angular_velocity": physics_frame["wood_block_angular_velocity"],
                 "ball_floor_gap": physics_frame["ball_floor_gap"],
                 "ball_block_gap": physics_frame["ball_block_gap"],
+                "ball_ramp_gap": physics_frame.get("ball_ramp_gap"),
             }
         )
     (out_dir / GROUND_TRUTH_NAME).write_text(
