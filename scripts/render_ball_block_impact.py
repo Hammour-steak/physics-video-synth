@@ -34,7 +34,13 @@ SIDE_IMPACT_BALL_INITIAL_XY = (-3.15, -0.12)
 WOOD_BLOCK_LOCATION = (0.23, -0.02, 0.35)
 WOOD_BLOCK_DIMENSIONS = (0.92, 0.58, 0.70)
 REALISM_PROFILE = "enhanced"
-MOTION_CHOICES = ("side_impact", "drop_onto_block", "incline_slide_falloff")
+MOTION_CHOICES = (
+    "side_impact",
+    "drop_onto_block",
+    "incline_slide_falloff",
+    "wood_incline_slide_falloff",
+    "wall_bounce",
+)
 DEFAULT_BLOCK_TEXTURE_ASSET = "wood_table"
 INCLINE_RAMP_LOCATION = (-0.35, 0.0, 0.77)
 INCLINE_RAMP_DIMENSIONS = (2.5, 1.1, 0.08)
@@ -80,6 +86,14 @@ class PBRTextureSet:
 class MotionSetup:
     ball_initial_location: tuple[float, float, float]
     ball_initial_velocity: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class BlockMotionSetup:
+    block_location: tuple[float, float, float]
+    block_pitch_deg: float
+    block_yaw_deg: float
+    block_initial_velocity: tuple[float, float, float]
 
 
 FLOOR_TEXTURE = PBRTextureSet(
@@ -264,6 +278,32 @@ def ramp_top_ball_center(
     )
 
 
+def ramp_top_box_center(
+    *,
+    local_x: float,
+    local_y: float,
+    half_height: float,
+    location: tuple[float, float, float],
+    dimensions: tuple[float, float, float],
+    pitch_deg: float,
+) -> tuple[float, float, float]:
+    pitch = math.radians(float(pitch_deg))
+    half_thickness = 0.5 * float(dimensions[2])
+    cos_pitch = math.cos(pitch)
+    sin_pitch = math.sin(pitch)
+    surface_point = (
+        location[0] + cos_pitch * local_x + sin_pitch * half_thickness,
+        location[1] + local_y,
+        location[2] - sin_pitch * local_x + cos_pitch * half_thickness,
+    )
+    normal = (sin_pitch, 0.0, cos_pitch)
+    return (
+        surface_point[0] + half_height * normal[0],
+        surface_point[1] + half_height * normal[1],
+        surface_point[2] + half_height * normal[2],
+    )
+
+
 def create_incline_slide_falloff_motion(
     rng: random.Random,
     jitter: float,
@@ -286,6 +326,53 @@ def create_incline_slide_falloff_motion(
     return MotionSetup(
         ball_initial_location=ball_initial_location,
         ball_initial_velocity=ball_initial_velocity,
+    )
+
+
+def create_wood_incline_slide_falloff_motion(
+    rng: random.Random,
+    jitter: float,
+) -> BlockMotionSetup:
+    local_x = -1.35 + rng.uniform(-0.03, 0.03) * jitter
+    local_y = rng.uniform(-0.04, 0.04) * jitter
+    pitch_deg = INCLINE_RAMP_PITCH_DEG
+    pitch = math.radians(pitch_deg)
+    downslope_speed = 0.15 + rng.uniform(-0.03, 0.03) * jitter
+    axis_u = (math.cos(pitch), 0.0, -math.sin(pitch))
+    return BlockMotionSetup(
+        block_location=ramp_top_box_center(
+            local_x=local_x,
+            local_y=local_y,
+            half_height=0.5 * WOOD_BLOCK_DIMENSIONS[2],
+            location=INCLINE_RAMP_LOCATION,
+            dimensions=INCLINE_RAMP_DIMENSIONS,
+            pitch_deg=pitch_deg,
+        ),
+        block_pitch_deg=pitch_deg,
+        block_yaw_deg=0.0,
+        block_initial_velocity=(
+            downslope_speed * axis_u[0],
+            0.0,
+            downslope_speed * axis_u[2],
+        ),
+    )
+
+
+def create_wall_bounce_motion(
+    rng: random.Random,
+    jitter: float,
+) -> MotionSetup:
+    return MotionSetup(
+        ball_initial_location=(
+            -0.85 + rng.uniform(-0.04, 0.04) * jitter,
+            -1.32 + rng.uniform(-0.05, 0.05) * jitter,
+            BALL_RADIUS + 0.001,
+        ),
+        ball_initial_velocity=(
+            0.60 + rng.uniform(-0.04, 0.04) * jitter,
+            4.10 + rng.uniform(-0.12, 0.12) * jitter,
+            0.0,
+        ),
     )
 
 
@@ -355,6 +442,27 @@ def create_incline_slide_falloff_camera(rng: random.Random) -> dict[str, object]
     }
 
 
+def create_wall_bounce_camera(rng: random.Random) -> dict[str, object]:
+    base_location = [
+        3.20 + rng.uniform(-0.08, 0.10),
+        -4.65 + rng.uniform(-0.10, 0.10),
+        2.05 + rng.uniform(-0.04, 0.06),
+    ]
+    target = [
+        -0.25 + rng.uniform(-0.04, 0.04),
+        1.00 + rng.uniform(-0.05, 0.05),
+        0.58 + rng.uniform(-0.03, 0.03),
+    ]
+    return {
+        "base_location": base_location,
+        "target": target,
+        "lens_mm": 42.0 + rng.uniform(-1.2, 1.4),
+        "sensor_width_mm": 32.0,
+        "focus_distance": math.dist(base_location, target) + rng.uniform(-0.04, 0.05),
+        "aperture_fstop": 7.2 + rng.uniform(-0.3, 0.5),
+    }
+
+
 def create_scenario(args: argparse.Namespace) -> dict[str, object]:
     seed = int(args.seed)
     rng = random.Random(seed)
@@ -369,13 +477,50 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
     if motion == "side_impact":
         motion_settings = create_side_impact_motion(rng, jitter)
         camera_settings = create_side_impact_camera(rng)
+        ball_enabled = True
+        block_enabled = True
+        block_pitch_deg = 0.0
+        block_yaw_deg = rng.uniform(-3.5, 3.5) * jitter
+        block_initial_velocity = (0.0, 0.0, 0.0)
     elif motion == "drop_onto_block":
         motion_settings = create_drop_onto_block_motion(args, rng, jitter, block_location)
         camera_settings = create_drop_onto_block_camera(rng, block_location)
+        ball_enabled = True
+        block_enabled = True
+        block_pitch_deg = 0.0
+        block_yaw_deg = rng.uniform(-3.5, 3.5) * jitter
+        block_initial_velocity = (0.0, 0.0, 0.0)
     elif motion == "incline_slide_falloff":
         block_location = (0.20, 1.05, WOOD_BLOCK_LOCATION[2])
         motion_settings = create_incline_slide_falloff_motion(rng, jitter)
         camera_settings = create_incline_slide_falloff_camera(rng)
+        ball_enabled = True
+        block_enabled = True
+        block_pitch_deg = 0.0
+        block_yaw_deg = rng.uniform(-3.5, 3.5) * jitter
+        block_initial_velocity = (0.0, 0.0, 0.0)
+    elif motion == "wood_incline_slide_falloff":
+        wood_motion = create_wood_incline_slide_falloff_motion(rng, jitter)
+        block_location = wood_motion.block_location
+        motion_settings = MotionSetup(
+            ball_initial_location=(0.0, -10.0, BALL_RADIUS + 0.001),
+            ball_initial_velocity=(0.0, 0.0, 0.0),
+        )
+        camera_settings = create_incline_slide_falloff_camera(rng)
+        ball_enabled = False
+        block_enabled = True
+        block_pitch_deg = wood_motion.block_pitch_deg
+        block_yaw_deg = wood_motion.block_yaw_deg
+        block_initial_velocity = wood_motion.block_initial_velocity
+    elif motion == "wall_bounce":
+        block_location = (0.20, 1.05, WOOD_BLOCK_LOCATION[2])
+        motion_settings = create_wall_bounce_motion(rng, jitter)
+        camera_settings = create_wall_bounce_camera(rng)
+        ball_enabled = True
+        block_enabled = False
+        block_pitch_deg = 0.0
+        block_yaw_deg = 0.0
+        block_initial_velocity = (0.0, 0.0, 0.0)
     else:
         raise ValueError(f"Unsupported motion: {motion}")
 
@@ -398,17 +543,25 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
         "seed": seed,
         "realism_profile": REALISM_PROFILE,
         "motion": motion,
+        "active_objects": [
+            *(['ball'] if ball_enabled else []),
+            *(['wood_block'] if block_enabled else []),
+        ],
         "surface_marks": args.surface_marks,
         "physics_jitter": float(args.physics_jitter),
         "camera_jitter": float(args.camera_jitter),
         "video_postprocess": bool(args.video_postprocess),
         "physics": {
             "motion": motion,
+            "ball_enabled": ball_enabled,
+            "block_enabled": block_enabled,
             "ball_radius": BALL_RADIUS,
             "ball_initial_location": list(motion_settings.ball_initial_location),
             "ball_initial_velocity": list(motion_settings.ball_initial_velocity),
             "block_location": list(block_location),
-            "block_yaw_deg": rng.uniform(-3.5, 3.5) * jitter,
+            "block_yaw_deg": block_yaw_deg,
+            "block_pitch_deg": block_pitch_deg,
+            "block_initial_velocity": list(block_initial_velocity),
             "ball_mass": 0.58 + rng.uniform(-0.05, 0.05) * jitter,
             "block_mass": 0.65 + rng.uniform(-0.08, 0.09) * jitter,
             "floor_friction": 0.82 + rng.uniform(-0.08, 0.05) * jitter,
@@ -416,12 +569,17 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "ball_restitution": 0.78 + rng.uniform(-0.06, 0.04) * jitter,
             "block_friction": 0.32 + rng.uniform(-0.05, 0.07) * jitter,
             "block_restitution": 0.55 + rng.uniform(-0.06, 0.05) * jitter,
-            "ramp_enabled": motion == "incline_slide_falloff",
+            "ramp_enabled": motion in {"incline_slide_falloff", "wood_incline_slide_falloff"},
             "ramp_location": list(INCLINE_RAMP_LOCATION),
             "ramp_dimensions": list(INCLINE_RAMP_DIMENSIONS),
             "ramp_pitch_deg": INCLINE_RAMP_PITCH_DEG,
             "ramp_friction": 0.58,
             "ramp_restitution": 0.05,
+            "wall_enabled": motion == "wall_bounce",
+            "wall_location": [0.0, 3.05, 1.45],
+            "wall_dimensions": [8.6, 0.08, 2.90],
+            "wall_friction": 0.34,
+            "wall_restitution": 0.82,
         },
         "render": {
             "exposure": rng.uniform(-0.08, 0.05),
@@ -516,6 +674,16 @@ def ball_initial_location(scenario: dict[str, object]) -> tuple[float, float, fl
     physics = scenario["physics"]
     assert isinstance(physics, dict)
     return tuple(float(value) for value in physics["ball_initial_location"])
+
+
+def ball_enabled(scenario: dict[str, object]) -> bool:
+    physics = scenario.get("physics")
+    return not isinstance(physics, dict) or bool(physics.get("ball_enabled", True))
+
+
+def block_enabled(scenario: dict[str, object]) -> bool:
+    physics = scenario.get("physics")
+    return not isinstance(physics, dict) or bool(physics.get("block_enabled", True))
 
 
 def write_scenario_metadata(out_dir: Path, scenario: dict[str, object]) -> None:
@@ -1677,6 +1845,8 @@ def run_physics_simulation(
             str(float(args.duration_sec)),
             "--ball-radius",
             str(float(radius)),
+            "--ball-enabled" if bool(physics.get("ball_enabled", True)) else "--no-ball-enabled",
+            "--block-enabled" if bool(physics.get("block_enabled", True)) else "--no-block-enabled",
             "--ball-initial-location",
             str(float(ball_initial_location[0])),
             str(float(ball_initial_location[1])),
@@ -1687,10 +1857,16 @@ def run_physics_simulation(
             str(float(block_location[2])),
             "--block-yaw-deg",
             str(float(physics["block_yaw_deg"])),
+            "--block-pitch-deg",
+            str(float(physics.get("block_pitch_deg", 0.0))),
             "--ball-initial-velocity",
             str(float(ball_initial_velocity[0])),
             str(float(ball_initial_velocity[1])),
             str(float(ball_initial_velocity[2])),
+            "--block-initial-velocity",
+            str(float(physics.get("block_initial_velocity", (0.0, 0.0, 0.0))[0])),
+            str(float(physics.get("block_initial_velocity", (0.0, 0.0, 0.0))[1])),
+            str(float(physics.get("block_initial_velocity", (0.0, 0.0, 0.0))[2])),
             "--ball-mass",
             str(float(physics["ball_mass"])),
             "--block-mass",
@@ -1720,6 +1896,19 @@ def run_physics_simulation(
             str(float(physics.get("ramp_friction", 0.58))),
             "--ramp-restitution",
             str(float(physics.get("ramp_restitution", 0.05))),
+            *(["--wall-enabled"] if bool(physics.get("wall_enabled", False)) else []),
+            "--wall-location",
+            str(float(physics.get("wall_location", (0.0, 3.05, 1.45))[0])),
+            str(float(physics.get("wall_location", (0.0, 3.05, 1.45))[1])),
+            str(float(physics.get("wall_location", (0.0, 3.05, 1.45))[2])),
+            "--wall-dimensions",
+            str(float(physics.get("wall_dimensions", (8.6, 0.08, 2.90))[0])),
+            str(float(physics.get("wall_dimensions", (8.6, 0.08, 2.90))[1])),
+            str(float(physics.get("wall_dimensions", (8.6, 0.08, 2.90))[2])),
+            "--wall-friction",
+            str(float(physics.get("wall_friction", 0.34))),
+            "--wall-restitution",
+            str(float(physics.get("wall_restitution", 0.82))),
         ],
         check=True,
     )
@@ -1728,13 +1917,20 @@ def run_physics_simulation(
     return records
 
 
-def apply_physics_animation(ball: bpy.types.Object, block: bpy.types.Object, physics: dict) -> None:
-    for obj in (ball, block):
+def apply_physics_animation(
+    ball: bpy.types.Object | None,
+    block: bpy.types.Object | None,
+    physics: dict,
+) -> None:
+    objects = [obj for obj in (ball, block) if obj is not None]
+    for obj in objects:
         obj.rotation_mode = "QUATERNION"
 
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
         for obj, prefix in ((ball, "ball"), (block, "wood_block")):
+            if obj is None or f"{prefix}_quaternion_xyzw" not in frame_record:
+                continue
             quat_xyzw = frame_record[f"{prefix}_quaternion_xyzw"]
             obj.location = frame_record[f"{prefix}_location"]
             obj.rotation_quaternion = (
@@ -1746,7 +1942,7 @@ def apply_physics_animation(ball: bpy.types.Object, block: bpy.types.Object, phy
             obj.keyframe_insert(data_path="location", frame=frame)
             obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    set_linear_keyframes((ball, block))
+    set_linear_keyframes(objects)
 
 
 def set_linear_keyframes(objects: Iterable[bpy.types.Object]) -> None:
@@ -1759,8 +1955,8 @@ def set_linear_keyframes(objects: Iterable[bpy.types.Object]) -> None:
 
 def export_ground_truth(
     out_dir: Path,
-    ball: bpy.types.Object,
-    block: bpy.types.Object,
+    ball: bpy.types.Object | None,
+    block: bpy.types.Object | None,
     camera: bpy.types.Object,
     frame_end: int,
     fps: int,
@@ -1772,6 +1968,18 @@ def export_ground_truth(
     ramp_surface = ramp_surface_metadata(scenario)
     if ramp_surface is not None:
         static_scene_surfaces.append(ramp_surface)
+    objects: dict[str, object] = {}
+    if ball is not None:
+        objects["ball"] = {
+            "object_name": ball.name,
+            "radius_m_scene_units": BALL_RADIUS,
+        }
+    if block is not None:
+        objects["wood_block"] = {
+            "object_name": block.name,
+            "dimensions_scene_units": list(WOOD_BLOCK_DIMENSIONS),
+        }
+
     records = {
         "schema_version": 1,
         "fps": int(fps),
@@ -1783,16 +1991,7 @@ def export_ground_truth(
             for key, value in physics.items()
             if key != "frames"
         },
-        "objects": {
-            "ball": {
-                "object_name": ball.name,
-                "radius_m_scene_units": BALL_RADIUS,
-            },
-            "wood_block": {
-                "object_name": block.name,
-                "dimensions_scene_units": list(WOOD_BLOCK_DIMENSIONS),
-            },
-        },
+        "objects": objects,
         "camera": {
             "object_name": camera.name,
             "lens_mm": float(camera.data.lens),
@@ -1817,28 +2016,40 @@ def export_ground_truth(
     for frame in range(1, frame_end + 1):
         scene.frame_set(frame)
         physics_frame = physics_by_frame[frame]
-        records["frames"].append(
-            {
-                "frame_index": frame,
-                "time_sec": (frame - 1) / float(fps),
-                "ball_matrix_world": [[float(v) for v in row] for row in ball.matrix_world],
-                "wood_block_matrix_world": [[float(v) for v in row] for row in block.matrix_world],
-                "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
-                "camera_world_to_camera_matrix": [
-                    [float(v) for v in row]
-                    for row in camera.matrix_world.inverted()
-                ],
-                "ball_location": [float(v) for v in ball.location],
-                "wood_block_location": [float(v) for v in block.location],
-                "ball_linear_velocity": physics_frame["ball_linear_velocity"],
-                "ball_angular_velocity": physics_frame["ball_angular_velocity"],
-                "wood_block_linear_velocity": physics_frame["wood_block_linear_velocity"],
-                "wood_block_angular_velocity": physics_frame["wood_block_angular_velocity"],
-                "ball_floor_gap": physics_frame["ball_floor_gap"],
-                "ball_block_gap": physics_frame["ball_block_gap"],
-                "ball_ramp_gap": physics_frame.get("ball_ramp_gap"),
-            }
-        )
+        frame_record = {
+            "frame_index": frame,
+            "time_sec": (frame - 1) / float(fps),
+            "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
+            "camera_world_to_camera_matrix": [
+                [float(v) for v in row]
+                for row in camera.matrix_world.inverted()
+            ],
+        }
+        if ball is not None:
+            frame_record.update(
+                {
+                    "ball_matrix_world": [[float(v) for v in row] for row in ball.matrix_world],
+                    "ball_location": [float(v) for v in ball.location],
+                    "ball_linear_velocity": physics_frame["ball_linear_velocity"],
+                    "ball_angular_velocity": physics_frame["ball_angular_velocity"],
+                    "ball_floor_gap": physics_frame["ball_floor_gap"],
+                    "ball_block_gap": physics_frame.get("ball_block_gap"),
+                    "ball_ramp_gap": physics_frame.get("ball_ramp_gap"),
+                    "ball_wall_gap": physics_frame.get("ball_wall_gap"),
+                }
+            )
+        if block is not None:
+            frame_record.update(
+                {
+                    "wood_block_matrix_world": [[float(v) for v in row] for row in block.matrix_world],
+                    "wood_block_location": [float(v) for v in block.location],
+                    "wood_block_linear_velocity": physics_frame["wood_block_linear_velocity"],
+                    "wood_block_angular_velocity": physics_frame["wood_block_angular_velocity"],
+                    "wood_block_floor_gap": physics_frame.get("wood_block_floor_gap"),
+                    "wood_block_ramp_gap": physics_frame.get("wood_block_ramp_gap"),
+                }
+            )
+        records["frames"].append(frame_record)
     (out_dir / GROUND_TRUTH_NAME).write_text(
         json.dumps(records, indent=2),
         encoding="utf-8",
@@ -1856,8 +2067,8 @@ def build_scene(args: argparse.Namespace, scenario: dict[str, object]) -> None:
     add_environment(scenario)
     camera = add_camera(scenario)
     radius = BALL_RADIUS
-    ball = add_ball(radius, scenario)
-    block = add_wood_block(scenario)
+    ball = add_ball(radius, scenario) if ball_enabled(scenario) else None
+    block = add_wood_block(scenario) if block_enabled(scenario) else None
     physics = run_physics_simulation(args, radius, scenario)
     apply_physics_animation(ball, block, physics)
     export_ground_truth(
