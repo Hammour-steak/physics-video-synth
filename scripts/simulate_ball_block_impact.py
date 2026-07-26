@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pybullet as p
 
+from incline_geometry import grounded_wedge_triangles, grounded_wedge_vertices
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -22,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--block-yaw-deg", type=float, default=0.0)
     parser.add_argument("--block-pitch-deg", type=float, default=0.0)
     parser.add_argument("--ball-initial-velocity", nargs=3, type=float, default=(6.0, 0.0, 0.0))
+    parser.add_argument("--ball-initial-angular-velocity", nargs=3, type=float)
     parser.add_argument("--block-initial-velocity", nargs=3, type=float, default=(0.0, 0.0, 0.0))
     parser.add_argument("--ball-mass", type=float, default=0.58)
     parser.add_argument("--block-mass", type=float, default=0.65)
@@ -36,12 +39,58 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ramp-pitch-deg", type=float, default=18.0)
     parser.add_argument("--ramp-friction", type=float, default=0.56)
     parser.add_argument("--ramp-restitution", type=float, default=0.06)
+    parser.add_argument(
+        "--ramp-profile",
+        choices=("tilted_slab", "grounded_wedge"),
+        default="tilted_slab",
+    )
     parser.add_argument("--wall-enabled", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--wall-location", nargs=3, type=float, default=(0.0, 3.05, 1.45))
     parser.add_argument("--wall-dimensions", nargs=3, type=float, default=(8.6, 0.08, 2.90))
     parser.add_argument("--wall-friction", type=float, default=0.34)
     parser.add_argument("--wall-restitution", type=float, default=0.82)
     return parser.parse_args()
+
+
+def no_slip_angular_velocity(
+    linear_velocity: tuple[float, float, float],
+    radius: float,
+    support_normal: tuple[float, float, float] = (0.0, 0.0, 1.0),
+) -> tuple[float, float, float]:
+    """Return sphere angular velocity whose support contact point is stationary."""
+    if radius <= 0.0:
+        raise ValueError("Sphere radius must be positive.")
+    normal_norm = math.sqrt(sum(value * value for value in support_normal))
+    if normal_norm <= 1e-12:
+        raise ValueError("Support normal must be non-zero.")
+    nx, ny, nz = (value / normal_norm for value in support_normal)
+    vx, vy, vz = linear_velocity
+    normal_speed = vx * nx + vy * ny + vz * nz
+    tx = vx - normal_speed * nx
+    ty = vy - normal_speed * ny
+    tz = vz - normal_speed * nz
+    return (
+        (ny * tz - nz * ty) / radius,
+        (nz * tx - nx * tz) / radius,
+        (nx * ty - ny * tx) / radius,
+    )
+
+
+def initial_ball_spin(
+    *,
+    linear_velocity: tuple[float, float, float],
+    location: tuple[float, float, float],
+    radius: float,
+    explicit_angular_velocity: tuple[float, float, float] | None,
+) -> tuple[tuple[float, float, float], str]:
+    if explicit_angular_velocity is not None:
+        return explicit_angular_velocity, "explicit"
+
+    floor_gap = location[2] - radius
+    floor_contact_tolerance = max(1e-6, 0.01 * radius)
+    if abs(floor_gap) <= floor_contact_tolerance:
+        return no_slip_angular_velocity(linear_velocity, radius), "floor_no_slip"
+    return (0.0, 0.0, 0.0), "airborne_zero_spin"
 
 
 def sphere_box_gap(
@@ -82,6 +131,17 @@ def simulate(args: argparse.Namespace) -> dict:
     block_pitch = math.radians(float(args.block_pitch_deg))
     block_orientation = p.getQuaternionFromEuler((0.0, block_pitch, block_yaw))
     ball_initial_velocity = tuple(float(value) for value in args.ball_initial_velocity)
+    explicit_ball_angular_velocity = (
+        tuple(float(value) for value in args.ball_initial_angular_velocity)
+        if args.ball_initial_angular_velocity is not None
+        else None
+    )
+    ball_initial_angular_velocity, ball_initial_spin_mode = initial_ball_spin(
+        linear_velocity=ball_initial_velocity,
+        location=ball_initial_location,
+        radius=radius,
+        explicit_angular_velocity=explicit_ball_angular_velocity,
+    )
     block_initial_velocity = tuple(float(value) for value in args.block_initial_velocity)
     ball_enabled = bool(args.ball_enabled)
     block_enabled = bool(args.block_enabled)
@@ -91,6 +151,7 @@ def simulate(args: argparse.Namespace) -> dict:
     ramp_half_extents = tuple(0.5 * value for value in ramp_dimensions)
     ramp_pitch = math.radians(float(args.ramp_pitch_deg))
     ramp_orientation = p.getQuaternionFromEuler((0.0, ramp_pitch, 0.0))
+    ramp_profile = str(args.ramp_profile)
     wall_enabled = bool(args.wall_enabled)
     wall_location = tuple(float(value) for value in args.wall_location)
     wall_dimensions = tuple(float(value) for value in args.wall_dimensions)
@@ -121,17 +182,33 @@ def simulate(args: argparse.Namespace) -> dict:
 
         ramp_id = None
         if ramp_enabled:
-            ramp_shape = p.createCollisionShape(
-                p.GEOM_BOX,
-                halfExtents=ramp_half_extents,
-                physicsClientId=client,
-            )
+            if ramp_profile == "grounded_wedge":
+                ramp_shape = p.createCollisionShape(
+                    p.GEOM_MESH,
+                    vertices=grounded_wedge_vertices(
+                        location=ramp_location,
+                        dimensions=ramp_dimensions,
+                        pitch_deg=float(args.ramp_pitch_deg),
+                    ),
+                    indices=grounded_wedge_triangles(),
+                    physicsClientId=client,
+                )
+                ramp_position = (0.0, 0.0, 0.0)
+                ramp_body_orientation = (0.0, 0.0, 0.0, 1.0)
+            else:
+                ramp_shape = p.createCollisionShape(
+                    p.GEOM_BOX,
+                    halfExtents=ramp_half_extents,
+                    physicsClientId=client,
+                )
+                ramp_position = ramp_location
+                ramp_body_orientation = ramp_orientation
             ramp_id = p.createMultiBody(
                 baseMass=0.0,
                 baseCollisionShapeIndex=ramp_shape,
                 baseVisualShapeIndex=-1,
-                basePosition=ramp_location,
-                baseOrientation=ramp_orientation,
+                basePosition=ramp_position,
+                baseOrientation=ramp_body_orientation,
                 physicsClientId=client,
             )
             p.changeDynamics(
@@ -210,11 +287,7 @@ def simulate(args: argparse.Namespace) -> dict:
             p.resetBaseVelocity(
                 ball_id,
                 linearVelocity=ball_initial_velocity,
-                angularVelocity=(
-                    ball_initial_velocity[1] / radius,
-                    -ball_initial_velocity[0] / radius,
-                    0.0,
-                ),
+                angularVelocity=ball_initial_angular_velocity,
                 physicsClientId=client,
             )
             p.changeDynamics(
@@ -341,6 +414,8 @@ def simulate(args: argparse.Namespace) -> dict:
                     "mass": float(args.ball_mass),
                     "initial_location": list(ball_initial_location),
                     "initial_linear_velocity": list(ball_initial_velocity),
+                    "initial_angular_velocity": list(ball_initial_angular_velocity),
+                    "initial_spin_mode": ball_initial_spin_mode,
                     "friction": float(args.ball_friction),
                     "restitution": float(args.ball_restitution),
                 },
@@ -365,6 +440,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "pitch_deg": float(args.ramp_pitch_deg),
                     "friction": float(args.ramp_friction),
                     "restitution": float(args.ramp_restitution),
+                    "profile": ramp_profile,
                 },
                 "wall": {
                     "enabled": wall_enabled,

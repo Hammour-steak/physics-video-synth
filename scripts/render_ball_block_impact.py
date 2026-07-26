@@ -15,6 +15,9 @@ from pathlib import Path
 import bpy
 from mathutils import Vector
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from incline_geometry import GROUNDED_WEDGE_QUADS, grounded_wedge_vertices
+
 
 WORKSPACE_DIR = Path(__file__).resolve().parents[1]
 POLYHAVEN_DIR = WORKSPACE_DIR / "assets" / "polyhaven"
@@ -575,6 +578,7 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
             "ramp_pitch_deg": INCLINE_RAMP_PITCH_DEG,
             "ramp_friction": 0.58,
             "ramp_restitution": 0.05,
+            "ramp_profile": "tilted_slab",
             "wall_enabled": motion == "wall_bounce",
             "wall_location": [0.0, 3.05, 1.45],
             "wall_dimensions": [8.6, 0.08, 2.90],
@@ -1498,23 +1502,57 @@ def add_incline_ramp(scenario: dict[str, object]) -> bpy.types.Object | None:
     assert isinstance(physics, dict)
     location = tuple(float(value) for value in physics["ramp_location"])
     dimensions = tuple(float(value) for value in physics["ramp_dimensions"])
-    pitch = math.radians(float(physics["ramp_pitch_deg"]))
     mat = create_principled_material(
         "matte worn plywood incline ramp",
         scenario_color(scenario, "ramp_color", (0.54, 0.42, 0.30, 1.0)),
         roughness=0.78,
         noise_bump=0.018,
     )
-    ramp = add_box(
-        "finite_incline_ramp",
-        location,
-        dimensions,
-        mat,
-        rotation_euler=(0.0, pitch, 0.0),
-        bevel_width=0.006,
-    )
+    ramp_profile = str(physics.get("ramp_profile", "tilted_slab"))
+    if ramp_profile == "grounded_wedge":
+        mesh = bpy.data.meshes.new("grounded_incline_wedge_mesh")
+        mesh.from_pydata(
+            grounded_wedge_vertices(
+                location=location,
+                dimensions=dimensions,
+                pitch_deg=float(physics["ramp_pitch_deg"]),
+            ),
+            [],
+            GROUNDED_WEDGE_QUADS,
+        )
+        mesh.update()
+        ramp = bpy.data.objects.new("grounded_incline_wedge", mesh)
+        bpy.context.collection.objects.link(ramp)
+        ramp.data.materials.append(mat)
+        ramp.data.use_auto_smooth = True
+        bevel = ramp.modifiers.new("soft real-world edges", "BEVEL")
+        bevel.width = 0.006
+        bevel.segments = 2
+        ramp.modifiers.new("weighted normals", "WEIGHTED_NORMAL")
+    else:
+        pitch = math.radians(float(physics["ramp_pitch_deg"]))
+        ramp = add_box(
+            "finite_incline_ramp",
+            location,
+            dimensions,
+            mat,
+            rotation_euler=(0.0, pitch, 0.0),
+            bevel_width=0.006,
+        )
     cube_project_uvs(ramp, cube_size=1.0)
     return ramp
+
+
+def floor_surface_metadata() -> dict[str, object]:
+    return {
+        "name": "room_floor",
+        "surface_role": "horizontal_support",
+        "plane_model": [0.0, 0.0, 1.0, 0.0],
+        "plane_origin": [0.0, 0.0, 0.0],
+        "plane_axis_u": [1.0, 0.0, 0.0],
+        "plane_axis_v": [0.0, 1.0, 0.0],
+        "extent_uv": [[-50.0, -50.0], [50.0, 50.0]],
+    }
 
 
 def create_rubber_ball_material(scenario: dict[str, object]) -> bpy.types.Material:
@@ -1896,6 +1934,8 @@ def run_physics_simulation(
             str(float(physics.get("ramp_friction", 0.58))),
             "--ramp-restitution",
             str(float(physics.get("ramp_restitution", 0.05))),
+            "--ramp-profile",
+            str(physics.get("ramp_profile", "tilted_slab")),
             *(["--wall-enabled"] if bool(physics.get("wall_enabled", False)) else []),
             "--wall-location",
             str(float(physics.get("wall_location", (0.0, 3.05, 1.45))[0])),
@@ -1964,7 +2004,7 @@ def export_ground_truth(
     scenario: dict[str, object],
 ) -> None:
     scene = bpy.context.scene
-    static_scene_surfaces = []
+    static_scene_surfaces = [floor_surface_metadata()]
     ramp_surface = ramp_surface_metadata(scenario)
     if ramp_surface is not None:
         static_scene_surfaces.append(ramp_surface)

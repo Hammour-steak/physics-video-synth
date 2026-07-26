@@ -13,15 +13,7 @@ from typing import Any
 WORKSPACE_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
 RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "render_ball_block_impact.py"
-ARCHIVE_ROOT = WORKSPACE_DIR / "renders" / "archive" / "2026-05-experiments"
 CANONICAL_BLOCK_TEXTURE = "wood_table"
-
-
-@dataclass(frozen=True)
-class ExistingCase:
-    case_id: str
-    description: str
-    source_dir: Path
 
 
 @dataclass(frozen=True)
@@ -34,18 +26,31 @@ class RenderCase:
     overrides: dict[str, Any]
 
 
-EXISTING_CASES = (
-    ExistingCase(
-        case_id="existing_side_impact_wood_table",
-        description="Existing moderate side impact baseline with static camera.",
-        source_dir=ARCHIVE_ROOT
-        / "batch_demo_720p_8s_s32_4k_all_pbr_side_impact_wood_table_static_camera"
-        / "sample_0000",
-    ),
-)
-
-
 NEW_CASES = (
+    RenderCase(
+        case_id="existing_side_impact_wood_table",
+        description="Ground rolling ball, moderate side impact, static camera.",
+        seed=1000,
+        motion="side_impact",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "side_impact",
+            "physics": {
+                "motion": "side_impact",
+                "ball_initial_location": [-3.2121548713, -0.1494058978, 0.341],
+                "ball_initial_velocity": [4.20, 0.01162, 0.0],
+                "block_location": [0.2899241957, 0.0104738339, 0.35],
+                "block_yaw_deg": 1.0638405158,
+                "ball_mass": 0.5374993180,
+                "block_mass": 0.84,
+                "floor_friction": 0.8431475864,
+                "ball_friction": 1.10,
+                "ball_restitution": 0.7570391780,
+                "block_friction": 0.23,
+                "block_restitution": 0.72,
+            },
+        },
+    ),
     RenderCase(
         case_id="side_moderate_head_on",
         description="Ground rolling ball, moderate head-on contact, fully visible.",
@@ -229,6 +234,46 @@ NEW_CASES = (
         },
     ),
     RenderCase(
+        case_id="wood_incline_grounded_slide_falloff_v3",
+        description=(
+            "Wood block slides down a floor-connected solid incline, leaves the "
+            "lower edge, and lands on the floor."
+        ),
+        seed=3302,
+        motion="wood_incline_slide_falloff",
+        block_texture_asset=CANONICAL_BLOCK_TEXTURE,
+        overrides={
+            "motion": "wood_incline_slide_falloff",
+            "physics": {
+                "motion": "wood_incline_slide_falloff",
+                "ball_enabled": False,
+                "block_enabled": True,
+                "ball_initial_location": [0.0, -10.0, 0.341],
+                "ball_initial_velocity": [0.0, 0.0, 0.0],
+                "block_location": [-1.037881411, 0.0, 1.403576487],
+                "block_yaw_deg": 0.0,
+                "block_pitch_deg": 18.0,
+                "block_initial_velocity": [0.1427, 0.0, -0.0464],
+                "ball_mass": 0.58,
+                "block_mass": 0.68,
+                "floor_friction": 0.82,
+                "block_friction": 0.35,
+                "block_restitution": 0.18,
+                "ramp_enabled": True,
+                "ramp_location": [-0.35, 0.0, 0.77],
+                "ramp_dimensions": [2.5, 1.1, 0.08],
+                "ramp_pitch_deg": 18.0,
+                "ramp_friction": 0.58,
+                "ramp_restitution": 0.05,
+                "ramp_profile": "grounded_wedge",
+            },
+            "camera": {
+                "target": [0.12, -0.03248376797838282, 0.76],
+                "lens_mm": 36.0,
+            },
+        },
+    ),
+    RenderCase(
         case_id="wall_bounce",
         description="Ground rolling ball collides with the back wall and rebounds.",
         seed=3401,
@@ -241,7 +286,7 @@ NEW_CASES = (
                 "ball_enabled": True,
                 "block_enabled": False,
                 "ball_initial_location": [-0.85, -1.32, 0.341],
-                "ball_initial_velocity": [0.60, 4.10, 0.0],
+                "ball_initial_velocity": [0.27070, 1.85, 0.0],
                 "block_location": [0.20, 1.05, 0.35],
                 "block_yaw_deg": 0.0,
                 "ball_mass": 0.58,
@@ -278,6 +323,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--physics-jitter", type=float, default=0.0)
     parser.add_argument("--camera-jitter", type=float, default=0.0)
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument(
+        "--case-id",
+        action="append",
+        choices=tuple(case.case_id for case in NEW_CASES),
+        help="Render only the selected case; repeat to select multiple cases.",
+    )
     parser.add_argument(
         "--keep-stale-cases",
         action="store_true",
@@ -367,42 +418,6 @@ def require_file(path: Path, *, description: str) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"Missing {description}: {path}")
     return path
-
-
-def copy_case_files(source_dir: Path, target_dir: Path) -> dict[str, str]:
-    if not source_dir.exists():
-        raise FileNotFoundError(f"Missing existing case directory: {source_dir}")
-    validate_block_texture(source_dir / "scenario_metadata.json")
-    target_dir.mkdir(parents=True, exist_ok=True)
-    video_source = preferred_video_path(source_dir)
-    outputs = {
-        "video": target_dir / "video.mp4",
-        "ground_truth": target_dir / "ground_truth_transforms.json",
-        "scenario_metadata": target_dir / "scenario_metadata.json",
-    }
-    shutil.copy2(video_source, outputs["video"])
-    for filename, key in (
-        ("ground_truth_transforms.json", "ground_truth"),
-        ("scenario_metadata.json", "scenario_metadata"),
-    ):
-        source = require_file(source_dir / filename, description=f"existing case {filename}")
-        shutil.copy2(source, outputs[key])
-    for key, path in outputs.items():
-        require_file(path, description=f"copied {key}")
-    validate_block_texture(outputs["scenario_metadata"])
-    return {key: str(path.resolve()) for key, path in outputs.items()}
-
-
-def existing_case_outputs(case_dir: Path) -> dict[str, str]:
-    outputs = {
-        "video": case_dir / "video.mp4",
-        "ground_truth": case_dir / "ground_truth_transforms.json",
-        "scenario_metadata": case_dir / "scenario_metadata.json",
-    }
-    for key, path in outputs.items():
-        require_file(path, description=f"existing suite {key}")
-    validate_block_texture(outputs["scenario_metadata"])
-    return {key: str(path.resolve()) for key, path in outputs.items()}
 
 
 def render_command(
@@ -498,11 +513,16 @@ def run_render(command: list[str], *, verbose: bool) -> None:
 def main() -> None:
     args = parse_args()
     args.out_root.mkdir(parents=True, exist_ok=True)
+    selected_case_ids = set(args.case_id or ())
+    new_cases = tuple(
+        case
+        for case in NEW_CASES
+        if not selected_case_ids or case.case_id in selected_case_ids
+    )
     keep_case_ids = {
-        *(case.case_id for case in EXISTING_CASES),
         *(case.case_id for case in NEW_CASES),
     }
-    if not args.keep_stale_cases and not args.dry_run:
+    if not selected_case_ids and not args.keep_stale_cases and not args.dry_run:
         clean_stale_case_dirs(args.out_root, keep_case_ids=keep_case_ids)
     manifest_path = args.out_root / "suite_manifest.json"
     manifest: dict[str, Any] = {
@@ -520,31 +540,7 @@ def main() -> None:
     }
     write_json(manifest_path, manifest)
 
-    for case in EXISTING_CASES:
-        case_dir = args.out_root / "cases" / case.case_id
-        record: dict[str, Any] = {
-            "case_id": case.case_id,
-            "kind": "existing",
-            "description": case.description,
-            "source_dir": str(case.source_dir.resolve()),
-            "case_dir": str(case_dir.resolve()),
-            "status": "pending",
-        }
-        manifest["cases"].append(record)
-        write_json(manifest_path, manifest)
-        if (
-            args.skip_existing
-            and (case_dir / "video.mp4").exists()
-            and case_outputs_match_texture(case_dir)
-        ):
-            record["status"] = "skipped_existing"
-            record["outputs"] = existing_case_outputs(case_dir)
-        else:
-            record["outputs"] = copy_case_files(case.source_dir, case_dir)
-            record["status"] = "completed"
-        write_json(manifest_path, manifest)
-
-    for case in NEW_CASES:
+    for case in new_cases:
         case_dir = args.out_root / "cases" / case.case_id
         overrides_path = case_dir / "scenario_overrides.json"
         write_json(overrides_path, case.overrides)

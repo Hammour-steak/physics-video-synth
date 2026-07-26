@@ -1,10 +1,9 @@
 # Physics Video Synth
 
-This project generates realistic synthetic physical-interaction videos for 4D
-reconstruction tests. The current scene, `ball_block_impact`, simulates a red
-rubber ball impacting a textured wooden block on a room-scale hardwood floor.
-Motion is simulated with PyBullet and rendered in Blender Cycles with Poly
-Haven CC0 HDRI/PBR assets and ambientCG rubber PBR maps.
+This project generates deterministic physical-interaction videos and matching
+ground-truth trajectories for PCVE. PyBullet owns rigid-body simulation and
+Blender Cycles owns rendering. The maintained scenes cover ball/block impact,
+drop, wall rebound, grounded-incline motion, and a three-domino gravity chain.
 
 The current renderer builds a more lived-in room scene around the impact:
 painted walls, baseboards, distant background objects, optional muted surface
@@ -130,6 +129,56 @@ Outputs are written under `cases/<case_id>/` with `video.mp4`,
 `ground_truth_transforms.json`, `scenario_metadata.json`, and, for newly
 rendered cases, `scenario_overrides.json`. The suite root also contains
 `suite_manifest.json` with case descriptions, commands, and output paths.
+
+## Reproduce The Six PCVE Cases
+
+The PCVE repository publishes a compact six-case snapshot under
+`benchmarks/pcve_six_cases/`. Reproduce its five ball/wood cases with one suite
+command (repeat `--case-id` exactly as shown):
+
+```bash
+python3 scripts/build_pcve_motion_suite.py \
+  --out-root renders/pcve_six_cases \
+  --resolution 1280 720 \
+  --fps 24 \
+  --duration-sec 8 \
+  --samples 32 \
+  --device auto \
+  --case-id drop_centered_soft \
+  --case-id drop_lateral_mild \
+  --case-id existing_side_impact_wood_table \
+  --case-id wall_bounce \
+  --case-id wood_incline_grounded_slide_falloff_v3
+```
+
+Generate the three-domino case with its dedicated scene entrypoint:
+
+```bash
+${BLENDER_BIN:-blender} -b \
+  --python scripts/render_domino_chain.py -- \
+  --mode animation \
+  --out-dir renders/pcve_six_cases/cases/domino \
+  --resolution 1280 720 \
+  --fps 24 \
+  --duration-sec 8 \
+  --samples 32 \
+  --device auto \
+  --seed 3501 \
+  --spacing 0.68 \
+  --first-tilt-deg 12
+```
+
+Each command is deterministic when Blender, PyBullet, render assets, and GPU
+renderer are held fixed. Small floating-point or ray-tracing differences may
+remain across Blender, CUDA, and driver versions. The committed videos and GT
+JSON files are therefore the evaluation reference; regenerated outputs are a
+reproducibility check rather than a byte-for-byte fixture.
+
+Run the pure-Python physics tests without scanning the local Blender tree:
+
+```bash
+python3 -m pytest -q
+```
 
 ## Batch Render
 
