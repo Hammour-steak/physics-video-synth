@@ -8,35 +8,26 @@ import subprocess
 from pathlib import Path
 
 
-WORKSPACE_DIR = Path(__file__).resolve().parents[1]
+WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
-RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "render_ball_block_impact.py"
-MOTION_CHOICES = ("side_impact", "drop_onto_block")
-BLOCK_TEXTURE_CHOICES = ("wood_table", "stained_pine")
+RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "bowling" / "render_bowling.py"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Batch render randomized ball-block impact videos with Blender."
+        description="Batch render randomized bowling videos with Blender."
     )
-    parser.add_argument("--out-root", type=Path, default=WORKSPACE_DIR / "renders" / "batch")
+    parser.add_argument("--out-root", type=Path, default=WORKSPACE_DIR / "renders" / "batch_bowling")
     parser.add_argument("--count", type=int, default=4)
     parser.add_argument("--start-index", type=int, default=0)
-    parser.add_argument("--seed-base", type=int, default=1000)
-    parser.add_argument("--mode", choices=("preview", "animation"), default="preview")
+    parser.add_argument("--seed-base", type=int, default=5000)
+    parser.add_argument("--mode", choices=("preview", "animation", "frames"), default="preview")
     parser.add_argument("--resolution", nargs=2, type=int, default=(960, 540))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=8.0)
+    parser.add_argument("--duration-sec", type=float, default=3.0)
     parser.add_argument("--samples", type=int, default=96)
-    parser.add_argument("--preview-frame", type=int, default=86)
+    parser.add_argument("--preview-frame", type=int, default=16)
     parser.add_argument("--device", choices=("auto", "cpu"), default="cpu")
-    parser.add_argument("--motion", choices=MOTION_CHOICES, default="side_impact")
-    parser.add_argument("--block-texture-asset", choices=BLOCK_TEXTURE_CHOICES, default="wood_table")
-    parser.add_argument("--drop-x-velocity", type=float, default=None)
-    parser.add_argument("--drop-y-velocity", type=float, default=None)
-    parser.add_argument("--physics-jitter", type=float, default=1.0)
-    parser.add_argument("--camera-jitter", type=float, default=0.0)
-    parser.add_argument("--surface-marks", choices=("none", "subtle", "full"), default="none")
     parser.add_argument("--blender", type=Path, default=None)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -45,14 +36,14 @@ def parse_args() -> argparse.Namespace:
 
 def sample_output_name(args: argparse.Namespace) -> str:
     if args.mode == "preview":
-        frame_end = max(2, int(round(float(args.duration_sec) * int(args.fps))))
-        preview_frame = max(1, min(int(args.preview_frame), frame_end))
-        return f"preview_frame_{preview_frame:05d}.png"
-    return "ball_block_impact.mp4"
+        return "preview.png"
+    if args.mode == "frames":
+        return "frame_0001.png"
+    return "bowling.mp4"
 
 
 def render_command(args: argparse.Namespace, *, out_dir: Path, seed: int) -> list[str]:
-    return [
+    cmd = [
         str(args.blender),
         "-b",
         "--python",
@@ -77,33 +68,8 @@ def render_command(args: argparse.Namespace, *, out_dir: Path, seed: int) -> lis
         str(args.device),
         "--seed",
         str(int(seed)),
-        "--motion",
-        str(args.motion),
-        "--block-texture-asset",
-        str(args.block_texture_asset),
-        *(
-            [
-                "--drop-x-velocity",
-                str(float(args.drop_x_velocity)),
-            ]
-            if args.drop_x_velocity is not None
-            else []
-        ),
-        *(
-            [
-                "--drop-y-velocity",
-                str(float(args.drop_y_velocity)),
-            ]
-            if args.drop_y_velocity is not None
-            else []
-        ),
-        "--physics-jitter",
-        str(float(args.physics_jitter)),
-        "--camera-jitter",
-        str(float(args.camera_jitter)),
-        "--surface-marks",
-        str(args.surface_marks),
     ]
+    return cmd
 
 
 def write_manifest(path: Path, manifest: dict[str, object]) -> None:
