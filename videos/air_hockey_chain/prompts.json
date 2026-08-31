@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "case_id": "air_hockey_chain_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "blue_mallet",
+      "zh": "蓝色球槌",
+      "en": "the blue mallet",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "red_mallet",
+      "zh": "红色球槌",
+      "en": "the red mallet",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "white_mallet",
+      "zh": "白色球槌",
+      "en": "the white mallet",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "蓝色球槌沿桌面被推向红色球槌,撞上后停在原地、把速度交出去;红色球槌照样把速度交给白色球槌,白色球槌再把这股推力带向近端围板。",
+      "en": "The blue mallet is pushed along the table into the red mallet, stops where it hits and hands its speed on; the red mallet passes it to the white mallet the same way, and the white one carries the push on to the near rail."
+    },
+    "quantitative": {
+      "zh": "三个相同的球槌成一列排开,间距 0.60 m。蓝色球槌以 0.8 m/s 被推向红色球槌并停住,红色球槌又撞上白色球槌后停住。三个球槌的行程都在 0.49 m 上下。",
+      "en": "Three identical mallets sit in a line 0.60 m apart. The blue mallet is pushed at 0.8 m/s into the red mallet and stops there; the red mallet goes on into the white mallet and stops in turn. All three end up having travelled about the same 0.49 m."
+    }
+  }
+}

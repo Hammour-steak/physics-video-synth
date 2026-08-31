@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "bowling_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "ball",
+      "zh": "保龄球",
+      "en": "the bowling ball",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "pins",
+      "zh": "保龄球瓶",
+      "en": "the bowling pin set",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "保龄球滚下球道撞进保龄球瓶阵,从瓶阵正面穿过并继续前行,球瓶被撞散。",
+      "en": "The bowling ball is rolled down the lane into the bowling pin set, ploughs through the front of the formation and carries on past it while the pins scatter."
+    },
+    "quantitative": {
+      "zh": "3 kg 的保龄球以 8 m/s 滚下球道撞进保龄球瓶阵,从瓶阵正面穿过,全程 14.35 m。球瓶被撞散,三只加起来移动 6.67 m,其中头瓶一只就占了 4.08 m。",
+      "en": "A 3 kg bowling ball is rolled at 8 m/s down the lane into the bowling pin set. It ploughs through the front of the formation and carries 14.35 m in all; the pins scatter for 6.67 m of travel between them, the head pin alone accounting for 4.08 m."
+    }
+  }
+}

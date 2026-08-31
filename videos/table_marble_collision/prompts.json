@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "table_marble_collision_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "big_marble",
+      "zh": "大玻璃球",
+      "en": "the big marble",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "small_marble",
+      "zh": "小玻璃球",
+      "en": "the small marble",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "大玻璃球沿吧台滚向停在远端的小玻璃球。小玻璃球被撞得向前跑,大玻璃球在后面继续前进。",
+      "en": "The big marble is rolled along the bar table into the small marble sitting near the far end. The small marble is sent forward and the big marble carries on behind it."
+    },
+    "quantitative": {
+      "zh": "100 mm 的大玻璃球以 1.31 m/s 沿吧台滚向停在远端的 50 mm 小玻璃球。两球是同一种玻璃,小玻璃球质量只有八分之一:撞击把它送出 0.68 m,大玻璃球则继续前进,全程 0.89 m。",
+      "en": "The big marble, 100 mm across, is rolled at 1.31 m/s along the bar table into the small marble, 50 mm across, sitting near the far end. Both are the same glass, so the small marble is an eighth of the mass: the impact sends it 0.68 m forward while the big marble carries on for 0.89 m in all."
+    }
+  }
+}

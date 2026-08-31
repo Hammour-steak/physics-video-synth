@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "ball_block_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "ball",
+      "zh": "红球",
+      "en": "the ball",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "wood_block",
+      "zh": "木块",
+      "en": "the wooden block",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "红球滚过地板撞上木块,把木块推走一段后木块停下;红球随后越过木块继续前进,片尾时仍在缓慢滚动。",
+      "en": "The ball rolls across the floor into the wooden block, shoves it along until the block stops, then carries on past it and is still rolling slowly when the clip ends."
+    },
+    "quantitative": {
+      "zh": "红球以 6 m/s 滚入,第 13 帧撞上木块,把木块推出 1.47 m 后木块停下。红球越过木块继续前进,全程 4.17 m,4 秒片尾时仍在缓慢滚动。",
+      "en": "The ball rolls in at 6 m/s, reaches the wooden block on frame 13 and shoves it 1.47 m across the floor before the block comes to rest. The ball carries on past it, covering 4.17 m in all, and is still rolling slowly when the 4 s clip ends."
+    }
+  }
+}

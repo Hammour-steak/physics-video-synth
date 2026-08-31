@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "case_id": "tennis_flight_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "ball",
+      "zh": "网球",
+      "en": "the tennis ball",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "网球被击出后在空中划出弧线,越过球网,在另一侧落地并滚出一段后停下。",
+      "en": "The tennis ball is hit into the air, arcs over the net, touches down on the far side and rolls out to a stop."
+    },
+    "quantitative": {
+      "zh": "网球从 (-4, 0, 1.5) 以 (4.5, 0, 4.5) m/s 发出,越过 x=0 处的球网,第 29 帧首次落地,在 4 秒窗口结束时滚到 x=+3.31。",
+      "en": "The tennis ball is launched from (-4, 0, 1.5) at (4.5, 0, 4.5) m/s. It arcs over the net at x=0, first touches down on frame 29, and rolls out to x=+3.31 by the end of the 4 s window."
+    }
+  }
+}

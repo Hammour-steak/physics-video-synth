@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "case_id": "domino_chain_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "domino_1",
+      "zh": "第 1 张骨牌",
+      "en": "the first domino",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "domino_2",
+      "zh": "第 2 张骨牌",
+      "en": "the second domino",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "domino_3",
+      "zh": "第 3 张骨牌",
+      "en": "the third domino",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "domino_4",
+      "zh": "第 4 张骨牌",
+      "en": "the fourth domino",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "第 1 张骨牌起始就已倾过平衡点,倒下去撞倒第 2 张,第 2 张撞倒第 3 张,第 3 张撞倒第 4 张。四张最后都平躺在桌面上。",
+      "en": "The first domino starts already tipped past its balance point and falls into the second, which topples the third, which topples the fourth. All four end up flat on the table."
+    },
+    "quantitative": {
+      "zh": "四张相同的骨牌间隔 0.80 m 立成一排。第 1 张骨牌预先倾斜到临界角以外,靠重力起倒,推倒第 2 张骨牌,第 2 张推倒第 3 张骨牌,第 3 张再推倒第 4 张骨牌。四张最后都平躺在桌面上。",
+      "en": "Four identical tiles stand 0.80 m apart in a straight row. The first domino starts pre-tilted past its critical angle so gravity begins the fall; it topples the second domino, which topples the third domino, which topples the fourth domino. All four end up flat on the tabletop."
+    }
+  }
+}

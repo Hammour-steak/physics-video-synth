@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "case_id": "dining_chain_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "can",
+      "zh": "可乐罐",
+      "en": "the cola can",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "cup",
+      "zh": "汽水杯",
+      "en": "the soda cup",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "milk",
+      "zh": "牛奶盒",
+      "en": "the milk carton",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "可乐罐沿桌面被推出,撞上汽水杯,汽水杯又撞上牛奶盒。三者依次滑行后停下。",
+      "en": "The cola can is pushed along the table into the soda cup, which is shoved on into the milk carton. All three slide before coming to rest."
+    },
+    "quantitative": {
+      "zh": "可乐罐以 3.3 m/s 被推出,撞上 0.50 m 外的汽水杯,汽水杯又撞上再往前 0.50 m 的牛奶盒。三者依次滑行后停下 —— 可乐罐 1.31 m、汽水杯 0.91 m、牛奶盒 0.48 m。",
+      "en": "The cola can is pushed at 3.3 m/s and strikes the soda cup 0.50 m downstream, which in turn strikes the milk carton another 0.50 m on. All three slide before coming to rest -- can 1.31 m, cup 0.91 m, carton 0.48 m."
+    }
+  }
+}

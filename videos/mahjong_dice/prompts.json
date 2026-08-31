@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "case_id": "mahjong_dice_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "red_die",
+      "zh": "红色骰子",
+      "en": "the red die",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "white_die",
+      "zh": "白色骰子",
+      "en": "the white die",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "红色骰子和白色骰子垂直落进麻将桌中央的骰盅。两颗都没有旋转和横向推力,各弹几下后停稳。",
+      "en": "The red die and the white die are dropped straight down into the mahjong table's centre tray. Neither is spun or pushed sideways; each bounces a few times and settles."
+    },
+    "quantitative": {
+      "zh": "红色骰子和白色骰子垂直落进麻将桌中央的骰盅 —— 红色骰子下落 0.60 m、初速 1.5 m/s,白色骰子下落 0.65 m、初速 0.8 m/s。没有旋转也没有横向推力,各弹几下后都在片尾前很早就停稳。",
+      "en": "The red die and the white die are dropped straight down into the mahjong table's centre tray -- the red die through 0.60 m at 1.5 m/s, the white die through 0.65 m at 0.8 m/s. No spin and no lateral push; each bounces a few times and both settle well before the clip ends."
+    }
+  }
+}

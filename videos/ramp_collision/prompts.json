@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "case_id": "ramp_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "red_ball",
+      "zh": "红球",
+      "en": "the red ball",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "blue_marble",
+      "zh": "蓝球",
+      "en": "the blue marble",
+      "properties": [
+        "mass"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "yellow_marble",
+      "zh": "黄球",
+      "en": "the yellow marble",
+      "properties": [
+        "mass"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "红球从斜坡滚下到桌面,冲向停在那里的蓝球和黄球。它只够到蓝球、把它轻轻撞开;黄球始终没被碰到。",
+      "en": "The red ball rolls down a ramp onto the table towards the blue marble and the yellow marble waiting there. It reaches only the blue marble and nudges it a little; the yellow marble is never touched."
+    },
+    "quantitative": {
+      "zh": "红球从 12 度斜坡滚下到桌面,冲向蓝球和黄球。它只够到其中一颗:蓝球被撞开 0.07 m,黄球始终没被碰到。红球相对起点移动 0.26 m 后停下。",
+      "en": "The red ball rolls down a 12 deg ramp onto the table towards the blue marble and the yellow marble. It reaches only one of them: the blue marble is nudged 0.07 m and the yellow marble is never touched. The red ball stops 0.26 m from where it set off."
+    }
+  }
+}

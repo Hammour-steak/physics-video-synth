@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "case_id": "bouncing_ball_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "ball",
+      "zh": "红球",
+      "en": "the red ball",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "红球带着轻微的水平初速落下,触地后一路弹跳着横穿房间。弹跳逐次变小,片尾时仍在运动。",
+      "en": "The red ball is dropped with a gentle sideways push, meets the floor and bounces its way across the room. The bounces get smaller and it is still moving when the clip ends."
+    },
+    "quantitative": {
+      "zh": "红球从 1.57 m 高处释放,带 0.5 m/s 的水平初速,第 13 帧首次触地,之后一路弹跳着横穿房间。弹跳逐次衰减,片尾时球仍在运动。",
+      "en": "The red ball is released from 1.57 m with a gentle 0.5 m/s horizontal push, first meets the floor on frame 13, and bounces its way across the room. The chain decays over the clip and the ball is still moving when it ends."
+    }
+  }
+}

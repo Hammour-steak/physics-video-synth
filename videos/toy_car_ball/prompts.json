@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "toy_car_ball_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "toy_car",
+      "zh": "玩具小车",
+      "en": "the toy car",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "toy_ball",
+      "zh": "玩具球",
+      "en": "the toy ball",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "玩具小车沿架子被推出,追尾停在远端边缘的玩具球。玩具球被撞下架子落到地面;小车留在架子上。",
+      "en": "The toy car is pushed along a shelf and rear-ends the toy ball sitting near the far edge. The toy ball is knocked over the edge and lands on the floor; the car stays on the shelf."
+    },
+    "quantitative": {
+      "zh": "0.35 kg 的玩具小车以 0.6 m/s 沿架子推出,追尾停在远端边缘的 0.05 kg 玩具球。玩具球被撞下架子,落到地面 x=-0.90 处,相对原位移动 0.89 m。玩具小车留在架子上,前进 0.40 m 后停下。",
+      "en": "The toy car, 0.35 kg, is pushed at 0.6 m/s along a shelf and rear-ends the toy ball, 0.05 kg, sitting near the far edge. The toy ball is knocked over the edge and lands on the floor at x=-0.90, 0.89 m from where it sat. The toy car stays on the shelf, stopping 0.40 m along."
+    }
+  }
+}

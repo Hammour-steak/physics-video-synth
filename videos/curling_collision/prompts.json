@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "case_id": "curling_collision_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "red_stone",
+      "zh": "红色冰壶",
+      "en": "the red stone",
+      "properties": [
+        "initial_velocity",
+        "mass"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "yellow_stone",
+      "zh": "黄色冰壶",
+      "en": "the yellow stone",
+      "properties": [
+        "initial_velocity",
+        "mass"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "stones",
+      "zh": "两只冰壶",
+      "en": "the two stones",
+      "properties": [
+        "initial_velocity",
+        "restitution"
+      ],
+      "can_delete": false
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "红色冰壶和黄色冰壶从冰道两端相向掷出。两只冰壶各自滑行后停在中线两侧,靠得很近却没真正碰上。",
+      "en": "The red stone and the yellow stone are launched at each other from opposite ends of the sheet. The two stones slide in and come to rest either side of the centre line, close but without quite touching."
+    },
+    "quantitative": {
+      "zh": "红色冰壶和黄色冰壶都是 20 kg,从相距 5 m 处以 1.5 m/s 相向掷出。两只冰壶各自滑行 2.08 m,在第 40 帧前后相距不到 9 mm 却没真正碰上,最后停在中线两侧的 x=-0.42 和 x=+0.42。",
+      "en": "The red stone and the yellow stone, both 20 kg, are launched at each other at 1.5 m/s from 5 m apart. The two stones each slide 2.08 m and close to within 9 mm around frame 40 without quite touching, settling at x=-0.42 and x=+0.42 either side of the centre line."
+    }
+  }
+}

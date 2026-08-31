@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "case_id": "car_gap_jump_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "car",
+      "zh": "玩具车",
+      "en": "the toy car",
+      "properties": [
+        "friction",
+        "initial_velocity"
+      ],
+      "can_delete": false
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "玩具车被推过书堆,越过前方的缺口,正面朝上落在对面桌子上并停下。",
+      "en": "The toy car is pushed across a book stack, clears the gap beyond it, and lands upright on the far table where it comes to rest."
+    },
+    "quantitative": {
+      "zh": "玩具车被推过书堆,越过缺口,正面朝上落在对面桌子上,相对起点移动 1.07 m,停在 x=+0.87。",
+      "en": "The toy car is pushed across the book stack, clears the gap, and lands upright on the far table, coming to rest 1.07 m from where it set off, at x=+0.87."
+    }
+  }
+}

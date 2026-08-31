@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "picnic_apple_ball_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "apple",
+      "zh": "苹果",
+      "en": "the apple",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "soccer_ball",
+      "zh": "足球",
+      "en": "the soccer ball",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "苹果从头顶的树枝落到草地上的足球上,落点偏离球心,把足球拧得滚起来,滚一段后被摩擦停住;苹果自己则弹开。",
+      "en": "The apple falls from an overhead branch onto the soccer ball resting on the grass. It lands off-centre, torquing the ball into a roll until friction stops it, and bounces away itself."
+    },
+    "quantitative": {
+      "zh": "苹果从头顶的树枝落到草地上的足球上,落点偏离球心 0.105 m。这个力臂足以把球拧得滚起来:足球在草地上滚 0.54 m 后被摩擦停住,苹果则弹开,相对落点移动 2.37 m。",
+      "en": "The apple falls from an overhead branch onto the soccer ball resting on the grass, landing 0.105 m off the ball's centre. That lever arm is enough to torque the ball into a roll: the soccer ball travels 0.54 m across the grass before friction stops it, while the apple bounces on to end 2.37 m from where it fell."
+    }
+  }
+}

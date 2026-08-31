@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "case_id": "ball_carpet_climb_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "ball",
+      "zh": "排球",
+      "en": "the volleyball",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "排球滚过裸地板,上到与地面齐平的地毯上,被绒毛拖停在茶几旁。",
+      "en": "The volleyball is rolled across bare floor onto a rug lying flush with it, and the pile drags it to a stop beside the coffee table."
+    },
+    "quantitative": {
+      "zh": "排球以 2.05 m/s 滚过裸地板,上到与地面齐平的地毯上,被绒毛拖停,全程移动 1.09 m,停在茶几旁。",
+      "en": "The volleyball is rolled at 2.05 m/s across bare floor, reaches the flush rug, and is brought to rest by the pile after 1.09 m of travel in all, beside the coffee table."
+    }
+  }
+}

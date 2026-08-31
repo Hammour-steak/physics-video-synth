@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "table_drop_collision_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "rolling_ball",
+      "zh": "新网球",
+      "en": "the new tennis ball",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "target_ball",
+      "zh": "旧网球",
+      "en": "the old tennis ball",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "新网球被推过桌面,滚出桌沿掉到地毯上,砸在等在那里的旧网球上并把它推走一段。",
+      "en": "The new tennis ball is pushed along the table, runs off the lip and drops to the rug, landing on the old tennis ball waiting there and driving it along the floor."
+    },
+    "quantitative": {
+      "zh": "新网球以 1.28 m/s 被推过桌面,滚出桌沿掉到地毯上,砸在等在那里的旧网球上。旧网球被推出 0.30 m;新网球相对起点移动 0.88 m。",
+      "en": "The new tennis ball is pushed at 1.28 m/s along the table, runs off the lip, drops to the rug and lands on the old tennis ball waiting there. The old tennis ball is driven 0.30 m along the floor; the new one ends 0.88 m from where it started."
+    }
+  }
+}

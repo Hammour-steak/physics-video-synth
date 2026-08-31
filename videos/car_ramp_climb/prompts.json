@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "case_id": "car_ramp_climb_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "car",
+      "zh": "玩具车",
+      "en": "the toy car",
+      "properties": [
+        "friction",
+        "initial_velocity"
+      ],
+      "can_delete": false
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "玩具车冲上斜坡,越过坡顶,在空中翻转一圈后正面朝上落在坡后。",
+      "en": "The toy car is pushed up a ramp, clears the top, turns over in the air and lands upright just past it."
+    },
+    "quantitative": {
+      "zh": "玩具车以 2.7 m/s 冲上 20 度的光滑沥青坡,越过坡顶,在空中转完一圈后正面朝上落在坡后,行程 1.05 m,停在 x=-0.73。",
+      "en": "The toy car is pushed at 2.7 m/s up the 20 deg slick-asphalt ramp, clears the top, completes its rotation in the air, and lands upright just past the ramp, ending at x=-0.73 after 1.05 m of travel."
+    }
+  }
+}

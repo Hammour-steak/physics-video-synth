@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "pool_collision_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "cue_ball",
+      "zh": "母球",
+      "en": "the cue ball",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "target_ball",
+      "zh": "目标球",
+      "en": "the target ball",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "母球沿台面被推向目标球并正面撞上。母球接触瞬间停死,目标球向前滚一段后被摩擦停住。",
+      "en": "The cue ball is pushed along the felt at the target ball and hits it head-on. The cue ball stops dead on contact and the target ball rolls forward before friction brings it to rest."
+    },
+    "quantitative": {
+      "zh": "母球以 1.0 m/s 被推出,滚过 0.57 m 后在第 15 帧正撞上目标球。母球接触瞬间停死,目标球向前滚 0.12 m 后被摩擦停住。",
+      "en": "The cue ball is pushed at 1.0 m/s and hits the target ball head-on on frame 15 after 0.57 m of travel. The cue ball stops dead on contact and the target ball rolls forward 0.12 m before friction brings it to rest."
+    }
+  }
+}

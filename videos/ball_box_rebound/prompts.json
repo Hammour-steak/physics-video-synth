@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "case_id": "ball_box_rebound_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "ball_a",
+      "zh": "星星球",
+      "en": "the star ball",
+      "properties": [
+        "friction",
+        "initial_velocity",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": false
+    },
+    {
+      "object_id": "ball_b",
+      "zh": "小足球",
+      "en": "the little football",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "星星球滚向玩具箱的正面板,斜着弹开后撞上小足球并把它撞开。片尾前两球都已静止。",
+      "en": "The star ball is rolled at the toy chest's front panel, comes off it at an angle, and goes on to hit the little football and knock it clear. Both have settled before the clip ends."
+    },
+    "quantitative": {
+      "zh": "星星球以 2.60 m/s 滚向玩具箱的正面板,斜着弹开后撞上小足球,把它撞开 0.30 m。星星球相对起点移动 1.10 m,片尾前两球都已静止。",
+      "en": "The star ball is rolled at 2.60 m/s at the toy chest's front panel, comes off it at an angle, and goes on to hit the little football, knocking it 0.30 m clear. The star ball ends 1.10 m from where it started; both have settled before the clip ends."
+    }
+  }
+}

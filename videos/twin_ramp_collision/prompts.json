@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "case_id": "twin_ramp_collision_baseline",
+  "kind": "source",
+  "editable_objects": [
+    {
+      "object_id": "purple_ball",
+      "zh": "紫色玻璃球",
+      "en": "the purple marble",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    },
+    {
+      "object_id": "yellow_ball",
+      "zh": "黄色玻璃球",
+      "en": "the yellow marble",
+      "properties": [
+        "friction",
+        "mass",
+        "restitution"
+      ],
+      "can_delete": true
+    }
+  ],
+  "prompts": {
+    "vague": {
+      "zh": "紫色玻璃球和黄色玻璃球从对称斜坡的顶端同时释放,滚下后在坡底正面相撞。两球各自被弹回自己那侧的坡上一小段,再滚下来,最后停在谷底。",
+      "en": "The purple marble and the yellow marble are released together from the crests of matched ramps, roll down and meet head-on at the bottom. Both run a short way back up their own ramp, roll down again and settle in the valley."
+    },
+    "quantitative": {
+      "zh": "紫色玻璃球和黄色玻璃球都是 64 mm,从对称斜坡的顶端同时释放,靠重力滚下,第 35 帧在坡底正面相撞,各自约 0.92 m/s。两球都被弹回自己那侧的坡上一小段,再滚下来,最后停在谷底的 x=+0.07 和 x=-0.07。",
+      "en": "The purple marble and the yellow marble, both 64 mm, are released together from the crests of matched ramps, roll down under gravity, and meet head-on at the bottom on frame 35, each doing about 0.92 m/s. Both run a short way back up their own ramp, roll down again, and settle in the valley at x=+0.07 and x=-0.07."
+    }
+  }
+}
