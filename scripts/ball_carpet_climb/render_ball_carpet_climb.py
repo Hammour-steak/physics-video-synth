@@ -25,6 +25,7 @@ BALL_GLB = MODELS_DIR / "volleyball.glb"
 OUTPUT_STEM = "ball_carpet_climb"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
@@ -592,6 +593,14 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
 
     p = scenario["physics"]
     out = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = p.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     command = [
         python, str(Path(__file__).with_name("simulate_ball_carpet_climb.py")),
         "--out", str(out),
@@ -612,9 +621,12 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
         "--ball-restitution", str(float(p["ball_restitution"])),
         "--gravity-z", str(float(p["gravity_z"])),
     ]
+    if timed_edits:
+        command += ["--timed-edits-json", str(timed_edits_path)]
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
 
     q = data["quality"]
     if not q["reached_carpet"]:

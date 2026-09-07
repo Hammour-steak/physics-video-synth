@@ -23,6 +23,7 @@ MILK_GLB = MODELS_DIR / "milk_packaging.glb"
 
 OUTPUT_STEM = "dining_chain"
 PHYSICS_TEMP = "physics_transforms.json"
+TIMED_EDITS_TEMP = "timed_edits.json"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
@@ -158,6 +159,14 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     script = Path(__file__).with_name("simulate_dining_chain.py")
     out = args.out_dir / PHYSICS_TEMP
     physics = scenario["physics"]
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
 
     def triple(key: str) -> list[str]:
         values = physics[key]
@@ -176,9 +185,11 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
         "--object-frictions", *triple("object_frictions"),
         "--object-restitutions", *triple("object_restitutions"),
         "--object-active", *[str(int(v)) for v in physics["object_active"]],
-    ], check=True)
+    ] + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
+        check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return data
 
 
@@ -260,6 +271,14 @@ def cull_seats_beyond_x(x_threshold: float) -> None:
         me.update()
 
 
+def removal_frame(frames: list, key: str) -> int | None:
+    """The first frame ``key`` is absent on, if it starts out present."""
+    if not frames or not frames[0]["objects"][key]["active"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames
+                 if not f["objects"][key]["active"]), None)
+
+
 def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
     obj.rotation_mode = "QUATERNION"
     for fr in frames:
@@ -273,6 +292,20 @@ def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
         for fc in obj.animation_data.action.fcurves:
             for k in fc.keyframe_points:
                 k.interpolation = "LINEAR"
+    # A container a timed edit takes away mid-slide leaves the picture at the
+    # frame the simulation stopped reporting it. CONSTANT interpolation so it
+    # vanishes between two frames rather than fading across them.
+    gone_at = removal_frame(frames, key)
+    if gone_at is not None and gone_at > 1:
+        for path in ("hide_viewport", "hide_render"):
+            setattr(obj, path, False)
+            obj.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(obj, path, True)
+            obj.keyframe_insert(data_path=path, frame=gone_at)
+        for fc in obj.animation_data.action.fcurves:
+            if fc.data_path in ("hide_viewport", "hide_render"):
+                for k in fc.keyframe_points:
+                    k.interpolation = "CONSTANT"
 
 
 def build_scene(args: argparse.Namespace, physics: dict, scenario: dict):
@@ -354,7 +387,10 @@ def export_ground_truth(out_dir: Path, containers, camera, physics: dict, scenar
         "objects": {
             key: (
                 {"present": False, "object_name": None} if containers[key] is None
-                else {"present": True, "object_name": containers[key].name}
+                else {"present": True, "object_name": containers[key].name,
+                      # The frame it stops being on screen, for a container a
+                      # timed edit takes away partway through.
+                      "removed_at_frame": removal_frame(physics["frames"], key)}
             )
             for key in ORDER
         },
@@ -373,7 +409,7 @@ def export_ground_truth(out_dir: Path, containers, camera, physics: dict, scenar
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps)}
         for key in ORDER:
             obj = containers[key]
-            if obj is None:
+            if obj is None or not source["objects"][key]["active"]:
                 entry[key] = {"present": False}
                 continue
             data = source["objects"][key]

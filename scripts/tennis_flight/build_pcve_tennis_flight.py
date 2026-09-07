@@ -70,7 +70,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_slick_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=13101,
-        dsl="SET ball.friction FROM 0.5 TO 0.1",
+        dsl="SET ball.friction TIMES 0.2",
         edit_summary=(
             "Ball's friction cut 5x -- both lateral and rolling coefficients "
             "scale together. After the same landing at x=1.06 the ball meets "
@@ -83,7 +83,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_grippy_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=13102,
-        dsl="SET ball.friction FROM 0.5 TO 1.5",
+        dsl="SET ball.friction TIMES 3",
         edit_summary=(
             "Ball's friction tripled. After the same landing at x=1.05 the "
             "high-friction contact eats the roll almost immediately: the "
@@ -95,7 +95,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_bouncy_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=13103,
-        dsl="SET ball.restitution FROM 0.05 TO 0.9",
+        dsl="SET ball.restitution TIMES 18",
         edit_summary=(
             "Ball's restitution 18x higher -- from a dead thud (0.05) to a "
             "near-perfect bounce (0.9). The first landing at x=1.05 is the "
@@ -108,25 +108,24 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_soft_serve",
         source_case_id=SOURCE_CASE_ID,
         seed=13104,
-        dsl="SET ball.initial_velocity FROM 4.5 TO 2.5",
+        dsl="SET ball.initial_velocity TIMES 0.6",
         edit_summary=(
-            "Launch speed cut nearly in half (4.5 -> 2.5 m/s along +X). "
-            "The ball no longer clears the net: it lands short at x=-1.16 m "
-            "(net is at x=0) and rolls out to only x=-0.49 m, versus the "
-            "baseline landing at x=1.05 m and finishing at x=3.31 m."
+            "Serve struck at a little over half the baseline speed. The "
+            "ball no longer clears the net: it lands short and finishes "
+            "at x=-0.12, still on the near side, where the baseline "
+            "carries through to x=+3.31."
         ),
     ),
     EditCase(
         case_id="edit_hard_serve",
         source_case_id=SOURCE_CASE_ID,
         seed=13105,
-        dsl="SET ball.initial_velocity FROM 4.5 TO 6.5",
+        dsl="SET ball.initial_velocity TIMES 1.5",
         edit_summary=(
-            "Launch speed ~1.4x faster (4.5 -> 6.5 m/s). The ball flies "
-            "further before touching down (landing at x=3.23 m instead of "
-            "x=1.05 m) and, still carrying energy after landing, rolls out "
-            "to x=7.11 m by the end of the 4 s window -- more than 2x the "
-            "baseline's 3.31 m final position."
+            "Serve struck half again as hard. The ball flies further "
+            "before touching down and, still carrying energy after "
+            "landing, rolls out to x=+7.64 by the end of the 4 s window "
+            "-- more than twice the baseline's x=+3.31."
         ),
     ),
 )
@@ -244,15 +243,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -267,6 +271,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -289,6 +294,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -308,6 +324,7 @@ def main() -> None:
             "that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -322,13 +339,31 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. A tennis ball is launched "
-            "from (-4, 0, 1.5) with initial velocity (4.5, 0, 4.5) m/s. "
-            "It arcs to about z=2.5 m over the net at x=0, first touches "
-            "down at x=1.05 (t=1.17 s), and rolls out to x=3.31 by the "
-            "end of the 4 s window."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The tennis ball is hit into the air, arcs over the net, "
+                    "touches down on the far side and rolls out to a stop."
+                ),
+                "zh": (
+                    "网球被击出后在空中划出弧线,越过球网,在另一侧落地并滚出一段"
+                    "后停下。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The tennis ball is launched from (-4, 0, 1.5) at (4.5, "
+                    "0, 4.5) m/s. It arcs over the net at x=0, first touches "
+                    "down on frame 29, and rolls out to x=+3.31 by the end of "
+                    "the 4 s window."
+                ),
+                "zh": (
+                    "网球从 (-4, 0, 1.5) 以 (4.5, 0, 4."
+                    "5) m/s 发出,越过 x=0 处的球网,第 29 帧首次"
+                    "落地,在 4 秒窗口结束时滚到 x=+3.31。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -372,6 +407,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

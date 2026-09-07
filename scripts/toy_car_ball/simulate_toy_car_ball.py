@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import pybullet as p
+
+# The shared timed-edit plumbing lives one directory up, next to the DSL.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pcve_timed_edits as timed  # noqa: E402
 
 
 # Geometry matches render_toy_car_ball.py. A toy car drives across a
@@ -80,7 +85,40 @@ def parse_args() -> argparse.Namespace:
     # present=false) so consumers keep a fixed layout. The car is always
     # present -- the whole sim is centred on its drive across the table.
     parser.add_argument("--ball-active", type=int, default=1)
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def apply_timed_params(client: int, params: dict, *, bodies: dict) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    ``bodies`` maps name -> body id and is edited in place when a body is
+    removed. Anything this scene's edit vocabulary cannot produce raises: an
+    edit that is silently dropped renders as a video that looks like the
+    baseline.
+    """
+    fields = {"ball_mass": ("ball", "mass"),
+              "ball_friction": ("ball", "lateralFriction"),
+              "ball_restitution": ("ball", "restitution"),
+              "car_mass": ("car", "mass"),
+              "car_friction": ("car", "lateralFriction"),
+              "car_restitution": ("car", "restitution")}
+    for key, value in params.items():
+        if key in ("active", "ball_active"):
+            # The scene's presence list is [car, ball]; only the ball can go.
+            flags = value if isinstance(value, (list, tuple)) else [value]
+            slot = [bodies["ball"]]
+            timed.remove_bodies(p, client, slot, flags[-1:])
+            bodies["ball"] = slot[0]
+        elif key in fields:
+            name, field = fields[key]
+            timed.set_one(p, client, bodies[name], field, value)
+        else:
+            raise timed.unknown_param(key)
 
 
 def simulate(args: argparse.Namespace) -> dict:
@@ -188,6 +226,12 @@ def simulate(args: argparse.Namespace) -> dict:
                 physicsClientId=client,
             )
 
+        timed_edits = timed.load_timed_edits(args.timed_edits_json)
+        timed.check_horizon(timed_edits, frame_end)
+        # Where the ball was last seen, for the frames after a timed delete
+        # takes it away; a ball that was never built keeps its start pose.
+        ball_last_pose = (ball_start_pos, (0.0, 0.0, 0.0, 1.0))
+
         frames = []
         ball_left_table = False
         ball_min_x = float(args.ball_start_x)
@@ -197,14 +241,22 @@ def simulate(args: argparse.Namespace) -> dict:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
 
+            # The edit lands at the top of its frame: this frame is the first
+            # one that shows it, and every frame before it is the source video.
+            if frame_index in timed_edits:
+                bodies = {"car": car_id, "ball": ball_id}
+                apply_timed_params(client, timed_edits[frame_index], bodies=bodies)
+                ball_id = bodies["ball"]
+
             car_pos, car_quat = p.getBasePositionAndOrientation(car_id, physicsClientId=client)
             car_lin, car_ang = p.getBaseVelocity(car_id, physicsClientId=client)
             if ball_id is not None:
                 ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
                 ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
                 ball_present = True
+                ball_last_pose = (ball_pos, ball_quat)
             else:
-                ball_pos, ball_quat = ball_start_pos, (0.0, 0.0, 0.0, 1.0)
+                ball_pos, ball_quat = ball_last_pose
                 ball_lin, ball_ang = (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)
                 ball_present = False
 
@@ -265,6 +317,9 @@ def simulate(args: argparse.Namespace) -> dict:
                     "mass": float(args.ball_mass),
                     "start_x": float(args.ball_start_x),
                     "present": ball_active,
+                    "removed_at_frame": next(
+                        (f["frame_index"] for f in frames if not f["ball"]["present"]),
+                        None) if ball_active else None,
                 },
                 "table": {
                     "half_extents": [TABLE_HALF_X, TABLE_HALF_Y, TABLE_THICKNESS / 2.0],
@@ -274,6 +329,10 @@ def simulate(args: argparse.Namespace) -> dict:
                     "half_extents": [FLOOR_HALF_X, FLOOR_HALF_Y, FLOOR_THICKNESS / 2.0],
                 },
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "ball_min_x_reached": ball_min_x,
                 "ball_left_table": ball_left_table,

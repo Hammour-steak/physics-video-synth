@@ -70,31 +70,26 @@ class EditCase:
 
 SOURCE_CASE_ID = "table_marble_collision_baseline"
 
-# Round baseline masses to make the physics_diff readable in prompts.
-# (edit_vocab computes them from radii at 2500 kg/m^3.)
-_BIG_MASS = round(BASELINE_PHYSICS["ball_a_mass"], 3)     # ~1.309 kg
-_SMALL_MASS = round(BASELINE_PHYSICS["ball_b_mass"], 3)   # ~0.164 kg
-
 
 EDIT_CASES: tuple[EditCase, ...] = (
     EditCase(
         case_id="edit_heavy_small_marble",
         source_case_id=SOURCE_CASE_ID,
         seed=17101,
-        dsl=f"SET small_marble.mass FROM {_SMALL_MASS} TO {round(_SMALL_MASS * 5, 3)}",
+        dsl="SET small_marble.mass TIMES 5",
         edit_summary=(
-            "Small marble made 5x heavier (0.164 -> 0.818 kg). The mass "
-            "ratio is now roughly 1.6:1 instead of 8:1, so the small one "
-            "barely reacts to the hit -- it moves only 0.29 m, less than "
-            "half the baseline's 0.68 m -- while the big marble is checked "
-            "hard on impact and only rolls 0.70 m total (vs 0.89 m)."
+            "Small marble made five times heavier, so the mass ratio "
+            "drops from 8:1 to about 1.6:1. It barely reacts to the hit "
+            "-- 0.29 m against the baseline's 0.68 m -- while the big "
+            "marble is checked hard on impact and rolls only 0.70 m "
+            "instead of 0.89 m."
         ),
     ),
     EditCase(
         case_id="edit_heavy_big_marble",
         source_case_id=SOURCE_CASE_ID,
         seed=17102,
-        dsl=f"SET big_marble.mass FROM {_BIG_MASS} TO {round(_BIG_MASS * 5, 3)}",
+        dsl="SET big_marble.mass TIMES 5",
         edit_summary=(
             "Big marble made 5x heavier (1.309 -> 6.545 kg). The mass "
             "ratio is now 40:1 instead of 8:1, so the impact drives even "
@@ -107,38 +102,41 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_matched_pair",
         source_case_id=SOURCE_CASE_ID,
         seed=17103,
-        dsl=f"SET big_marble.mass FROM {_BIG_MASS} TO {_SMALL_MASS}",
+        dsl="SET big_marble.mass TIMES 0.125",
         edit_summary=(
-            "Big marble made as light as the small one (mass ratio 1:1). "
-            "The head-on-ish hit turns into an equal-mass exchange: the big "
-            "one is stopped short at 0.66 m of travel (vs 0.89 m), and the "
-            "small one is nudged only 0.18 m -- the friction on the table "
-            "damps most of the transfer between two low-mass marbles."
+            "Big marble made exactly as heavy as the small one: it is "
+            "twice the radius, so an eighth of its mass is the small "
+            "one's mass, and the ratio goes from 8:1 to 1:1. The hit "
+            "becomes an equal-mass exchange -- the big one is stopped "
+            "short at 0.66 m against the baseline's 0.89 m, and the small "
+            "one is nudged only 0.18 m, because table friction damps most "
+            "of the transfer between two light marbles."
         ),
     ),
     EditCase(
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
         seed=17104,
-        dsl="SET big_marble.initial_velocity FROM 1.31 TO 0.9",
+        dsl="SET big_marble.initial_velocity TIMES 0.7",
         edit_summary=(
-            "Big marble pushed more gently (1.31 -> 0.9 m/s). It slows down "
-            "against table friction and stops 0.15 m short of the small "
-            "marble -- no contact at all. The small marble sits untouched "
-            "for the whole shot."
+            "Big marble pushed more gently. It slows against table "
+            "friction and stops short of the small marble -- 0.49 m of "
+            "travel against the baseline's 0.89 -- so no contact happens "
+            "at all. The small marble sits untouched for the whole shot."
         ),
     ),
     EditCase(
         case_id="edit_dead_small_marble",
         source_case_id=SOURCE_CASE_ID,
         seed=17105,
-        dsl="SET small_marble.restitution FROM 0.87 TO 0.05",
+        dsl="SET small_marble.restitution TIMES 0.05",
         edit_summary=(
-            "Small marble's restitution killed (0.87 -> 0.05). The impact "
-            "goes almost fully inelastic: the small marble absorbs the "
-            "collision instead of springing away, moving only 0.26 m (vs "
-            "0.68 m baseline), while the big marble drives on further "
-            "(0.93 m) rather than being handed off cleanly."
+            "Small marble's restitution killed. The impact goes almost "
+            "fully inelastic: the small marble absorbs the collision "
+            "instead of springing away, moving 0.26 m against the "
+            "baseline's 0.68 m, while the big marble is barely checked "
+            "and drives on to 0.93 m rather than being handed off "
+            "cleanly."
         ),
     ),
     EditCase(
@@ -150,6 +148,27 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "Small marble removed. The big marble rolls across the bar "
             "table unobstructed -- 1.01 m of travel instead of the "
             "baseline's 0.89 m -- and never hits anything."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_small_marble: they differ by
+    # the AT FRAME clause alone. Taking the small marble away after it has
+    # been struck is what makes the timing readable -- removing it beforehand
+    # leaves the big marble with nothing to slow it.
+    EditCase(
+        case_id="edit_remove_small_marble_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=8107,
+        dsl="DELETE small_marble AT FRAME 19",
+        edit_summary=(
+            "Small marble removed at frame 19, four frames after the big one "
+            "strikes it at frame 15. Frames 1-18 are the source video frame "
+            "for frame, impact included: the big marble arrives at 0.85 m/s "
+            "and leaves at 0.66, and the small one is 0.22 m along and still "
+            "rolling when it disappears. The big marble then coasts to rest "
+            "at x=+0.27 exactly as in the source. The whole-clip version of "
+            "the same delete is a different video again: with nothing to hit, "
+            "the big marble keeps its speed and runs on to x=+0.39."
         ),
     ),
 )
@@ -269,15 +288,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -292,6 +316,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -314,6 +339,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -332,6 +368,7 @@ def main() -> None:
             "and the physics diff are all derived from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -346,14 +383,35 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. A 100 mm glass marble is "
-            "rolled at 1.31 m/s along the bar table and strikes a 50 mm "
-            "glass marble sitting near the far end. Because both are the "
-            "same glass, the small one is 1/8 the mass; the impact sends "
-            "the small marble ~0.68 m forward while the big one continues "
-            "on for a total of 0.89 m."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The big marble is rolled along the bar table into the "
+                    "small marble sitting near the far end. The small marble "
+                    "is sent forward and the big marble carries on behind it."
+                ),
+                "zh": (
+                    "大玻璃球沿吧台滚向停在远端的小玻璃球。小玻璃球被撞得向前跑,"
+                    "大玻璃球在后面继续前进。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The big marble, 100 mm across, is rolled at 1.31 m/s "
+                    "along the bar table into the small marble, 50 mm across, "
+                    "sitting near the far end. Both are the same glass, so "
+                    "the small marble is an eighth of the mass: the impact "
+                    "sends it 0.68 m forward while the big marble carries on "
+                    "for 0.89 m in all."
+                ),
+                "zh": (
+                    "100 mm 的大玻璃球以 1.31 m/s 沿吧台滚向停在"
+                    "远端的 50 mm 小玻璃球。两球是同一种玻璃,小玻璃球质量"
+                    "只有八分之一:撞击把它送出 0.68 m,大玻璃球则继续前进"
+                    ",全程 0.89 m。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -402,6 +460,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

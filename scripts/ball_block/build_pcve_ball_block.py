@@ -83,7 +83,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_block",
         source_case_id=SOURCE_CASE_ID,
         seed=5101,
-        dsl="SET wood_block.mass FROM 0.65 TO 6.5",
+        dsl="SET wood_block.mass TIMES 10",
         edit_summary=(
             "Block made 10x heavier. It barely moves -- 6 cm instead of 1.47 m -- "
             "and the ball rebounds off it back the way it came instead of "
@@ -95,7 +95,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=5102,
-        dsl="SET ball.mass FROM 0.58 TO 5.8",
+        dsl="SET ball.mass TIMES 10",
         edit_summary=(
             "Ball made 10x heavier. It plows through the impact barely slowed "
             "(3.35 m/s out of 4.38 m/s in, against 0.65 m/s in the source) and "
@@ -108,38 +108,41 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_slow_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=5103,
-        dsl="SET ball.initial_velocity FROM 6 TO 4",
+        dsl="SET ball.initial_velocity TIMES 0.7",
         edit_summary=(
-            "Ball launched at 4 m/s instead of 6. Rolling resistance eats most "
-            "of the difference on the way across, so it arrives at 1.68 m/s "
-            "rather than 4.38 -- the contact is a nudge, not an impact. It "
-            "lands at frame 26 instead of 14 and the block shifts 28 cm instead "
-            "of 1.47 m."
+            "Ball launched at 4.2 m/s instead of 6. It reaches the block "
+            "much later, on frame 33 against the baseline's 13, and the "
+            "contact is a nudge rather than an impact: the block leaves "
+            "at 1.09 m/s instead of 2.83 and shifts 0.31 m instead of "
+            "1.47 m."
         ),
     ),
 EditCase(
         case_id="edit_grippy_block",
         source_case_id=SOURCE_CASE_ID,
         seed=5105,
-        dsl="SET wood_block.friction FROM 0.32 TO 1.5",
+        dsl="SET wood_block.friction TIMES 5",
         edit_summary=(
-            "Block's friction against the floor raised, as if it had a rubber "
-            "underside. It is struck just as hard -- it still leaves the "
-            "collision at 2.44 m/s -- but grinds to a halt after 30 cm instead "
-            "of coasting 1.47 m."
+            "Block's friction against the floor raised, as if it had a "
+            "rubber underside. It is struck just as hard -- it still "
+            "leaves the collision at 2.45 m/s against the baseline's 2.83 "
+            "-- but grinds to a halt after 0.29 m instead of coasting "
+            "1.47 m. The impact frame is unchanged at 13."
         ),
     ),
     EditCase(
         case_id="edit_bouncy_block",
         source_case_id=SOURCE_CASE_ID,
         seed=5106,
-        dsl="SET wood_block.restitution FROM 0.55 TO 1",
+        dsl="SET wood_block.restitution TIMES 1.8",
         edit_summary=(
-            "Block's faces made perfectly elastic, so the pair restitution goes "
-            "from 0.43 to 0.78. More of the ball's momentum goes into the block "
-            "and less stays with the ball: the block is driven 2.11 m instead "
-            "of 1.47 m, and the ball is checked almost dead at the impact "
-            "(0.18 m/s, against 0.65) and ends up behind where it hit."
+            "Block's faces made near-perfectly elastic. More of the "
+            "ball's momentum goes into the block and less stays with the "
+            "ball: the block leaves the impact at 3.50 m/s against the "
+            "baseline's 2.83 and is driven 2.10 m instead of 1.47 m, "
+            "while the ball ends 2.55 m from its start instead of 4.17 m "
+            "and is almost dead at 0.09 m/s. Contact is unchanged at "
+            "frame 13; only what follows it changes."
         ),
     ),
     EditCase(
@@ -151,6 +154,28 @@ EditCase(
             "Block removed. The ball rolls straight through the spot where it "
             "used to stand and on out of frame, with nothing in the video ever "
             "interrupting it. No collision at all."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as the case above: they differ by the AT
+    # FRAME clause alone. Taking the block away *after* it has been hit is what
+    # makes the timing carry information -- removing it beforehand would leave
+    # the ball's path identical to the whole-clip version.
+    EditCase(
+        case_id="edit_remove_block_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=5108,
+        dsl="DELETE wood_block AT FRAME 17",
+        edit_summary=(
+            "Block removed at frame 17, four frames after the ball strikes it "
+            "at frame 13. Frames 1-16 are the source video frame for frame, "
+            "impact included: the ball arrives at 4.5 m/s and is left with "
+            "0.8, and the block is already 0.40 m along and moving at 2.8 m/s "
+            "when it disappears. The ball then coasts on at its post-impact "
+            "speed exactly as in the source. The whole-clip version of the "
+            "same delete (edit_remove_block) is a different video again: with "
+            "nothing to hit, the ball never slows and ends 7 m further down "
+            "the floor."
         ),
     ),
 )
@@ -291,15 +316,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -314,6 +344,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -336,6 +367,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -354,6 +396,7 @@ def main() -> None:
         ),
         "motion": MOTION,
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -368,13 +411,33 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters, no jitter. The ball rolls in at "
-            "6 m/s, arrives at the block at 4.38 m/s on frame 14, is checked to "
-            "0.65 m/s, and shoves the block 1.47 m across the floor, where it "
-            "comes to rest. The ball follows it and is still rolling slowly "
-            "when the 3 s clip ends."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The ball rolls across the floor into the wooden block, "
+                    "shoves it along until the block stops, then carries on "
+                    "past it and is still rolling slowly when the clip ends."
+                ),
+                "zh": (
+                    "红球滚过地板撞上木块,把木块推走一段后木块停下;红球随后越过"
+                    "木块继续前进,片尾时仍在缓慢滚动。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The ball rolls in at 6 m/s, reaches the wooden block on "
+                    "frame 13 and shoves it 1.47 m across the floor before "
+                    "the block comes to rest. The ball carries on past it, "
+                    "covering 4.17 m in all, and is still rolling slowly when "
+                    "the 4 s clip ends."
+                ),
+                "zh": (
+                    "红球以 6 m/s 滚入,第 13 帧撞上木块,把木块推出 "
+                    "1.47 m 后木块停下。红球越过木块继续前进,全程 4.1"
+                    "7 m,4 秒片尾时仍在缓慢滚动。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -422,6 +485,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

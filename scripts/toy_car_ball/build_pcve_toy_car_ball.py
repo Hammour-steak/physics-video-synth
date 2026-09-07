@@ -67,20 +67,20 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
         seed=15101,
-        dsl="SET toy_car.initial_velocity FROM 0.6 TO 0.35",
+        dsl="SET toy_car.initial_velocity TIMES 0.6",
         edit_summary=(
-            "Car pushed more gently (0.6 -> 0.35 m/s). Table friction "
-            "bleeds off the push before the car ever reaches the ball: "
-            "the car coasts to a stop still on the table and the ball sits "
-            "untouched near the edge for the whole shot -- no collision, "
-            "no fall."
+            "Car pushed more gently. Table friction bleeds off the push "
+            "before the car ever reaches the ball: it coasts 0.15 m and "
+            "stops, still on the table, and the ball sits untouched near "
+            "the edge for the whole shot -- no collision and no fall, "
+            "where the baseline knocks it 0.89 m off the shelf."
         ),
     ),
     EditCase(
         case_id="edit_hard_push",
         source_case_id=SOURCE_CASE_ID,
         seed=15102,
-        dsl="SET toy_car.initial_velocity FROM 0.6 TO 0.9",
+        dsl="SET toy_car.initial_velocity TIMES 1.5",
         edit_summary=(
             "Car pushed 50% harder (0.6 -> 0.9 m/s). The heavier hit sends "
             "the ball flying off the edge much further: it lands and rolls "
@@ -89,29 +89,34 @@ EDIT_CASES: tuple[EditCase, ...] = (
         ),
     ),
     EditCase(
-        case_id="edit_heavy_car",
+        case_id="edit_heavy_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=15103,
-        dsl="SET toy_car.mass FROM 0.35 TO 1.2",
+        dsl="SET toy_ball.mass TIMES 20",
         edit_summary=(
-            "Car made 3.4x heavier (0.35 -> 1.2 kg). Same launch speed, "
-            "but much more momentum: the collision drives the ball out to "
-            "x=-2.33 m -- roughly 2.2x the baseline distance -- and the "
-            "car plows on and off the edge itself. Similar visual outcome "
-            "to the hard-push edit, achieved through a different knob."
+            "Ball made twenty times heavier, 0.05 kg to 1.0 kg, which puts it "
+            "at three times the car's own mass. The car still crosses the "
+            "shelf and reaches it -- 0.36 m of travel against the baseline's "
+            "0.40 m, stopping against the ball rather than driving through "
+            "it -- but it no longer has the momentum to move it: the ball "
+            "shifts 24 mm and stays on the shelf, where the baseline sends it "
+            "over the edge and 0.89 m down to the floor. What separates this "
+            "from edit_soft_push is that the collision does happen; the car "
+            "arrives and is stopped by the ball instead of running out of "
+            "push half-way there."
         ),
     ),
     EditCase(
         case_id="edit_bouncy_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=15104,
-        dsl="SET toy_ball.restitution FROM 0.6 TO 0.99",
+        dsl="SET toy_ball.restitution TIMES 1.5",
         edit_summary=(
-            "Ball's restitution pushed to 0.99 (near-perfect elastic "
-            "bounce). It is still knocked off the shelf, but instead of "
-            "settling on the floor at (x=-1.08, z=0.06) it keeps bouncing "
-            "throughout the shot -- final position (x=-0.99, z=0.84) with "
-            "the ball still airborne at end of clip."
+            "Ball's restitution raised by half, to a near-elastic 0.90. "
+            "It is still knocked off the shelf, but instead of settling "
+            "on the floor it keeps bouncing through the rest of the shot "
+            "-- five hops against the baseline's two -- and is still 0.17 "
+            "m up and moving at 0.23 m/s when the clip ends."
         ),
     ),
     EditCase(
@@ -124,6 +129,27 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "the far edge without hitting anything; no fall, no collision. "
             "The car itself comes to rest near the edge instead of being "
             "knocked off behind the ball as in the baseline."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as the case above: they differ by the AT
+    # FRAME clause alone. Taking the ball away after the car has already
+    # pushed it is what makes the timing readable -- removing it beforehand
+    # would leave nothing for the car to push and a different run entirely.
+    EditCase(
+        case_id="edit_remove_toy_ball_after_push",
+        source_case_id=SOURCE_CASE_ID,
+        seed=15106,
+        dsl="DELETE toy_ball AT FRAME 18",
+        edit_summary=(
+            "Ball removed at frame 18, six frames after the car reaches it at "
+            "frame 12. Frames 1-17 are the source video frame for frame: the "
+            "car noses into the ball and starts it rolling, and the ball is "
+            "0.07 m along when it disappears -- well short of the table edge "
+            "it rolls off in the source. The car carries on exactly as in the "
+            "source, stopping at x=-0.27. The whole-clip version of the same "
+            "delete has nothing to push against at all: the car runs 0.05 m "
+            "further, to x=-0.32."
         ),
     ),
 )
@@ -241,15 +267,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -264,6 +295,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -286,6 +318,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -304,6 +347,7 @@ def main() -> None:
             "the physics diff are all derived from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -318,13 +362,35 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. A toy car (0.35 kg) is "
-            "pushed at 0.6 m/s along a shelf and rear-ends a toy ball "
-            "(0.05 kg) sitting near the far edge. The ball is knocked off "
-            "and lands on the floor at x=-1.08 m; the car follows and "
-            "also topples off the edge."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The toy car is pushed along a shelf and rear-ends the "
+                    "toy ball sitting near the far edge. The toy ball is "
+                    "knocked over the edge and lands on the floor; the car "
+                    "stays on the shelf."
+                ),
+                "zh": (
+                    "玩具小车沿架子被推出,追尾停在远端边缘的玩具球。玩具球被撞下"
+                    "架子落到地面;小车留在架子上。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The toy car, 0.35 kg, is pushed at 0.6 m/s along a shelf "
+                    "and rear-ends the toy ball, 0.05 kg, sitting near the "
+                    "far edge. The toy ball is knocked over the edge and "
+                    "lands on the floor at x=-0.90, 0.89 m from where it sat. "
+                    "The toy car stays on the shelf, stopping 0.40 m along."
+                ),
+                "zh": (
+                    "0.35 kg 的玩具小车以 0.6 m/s 沿架子推出,追"
+                    "尾停在远端边缘的 0.05 kg 玩具球。玩具球被撞下架子,"
+                    "落到地面 x=-0.90 处,相对原位移动 0.89 m。玩"
+                    "具小车留在架子上,前进 0.40 m 后停下。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -368,6 +434,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

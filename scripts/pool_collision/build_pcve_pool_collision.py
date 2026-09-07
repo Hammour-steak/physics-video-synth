@@ -7,9 +7,18 @@ are all derived from that one string.
 The scene: two identical billiard balls on a pool table felt. The cue ball
 is given a straight +Y push at 1.0 m/s and hits the target ball head-on;
 at baseline the cue stops dead on contact and the target rolls forward
-~0.62 m before friction brings it to rest. Every value below was picked
+0.12 m before friction brings it to rest. Every value below was picked
 by sweeping simulate_pool_collision.py directly; the numbers in each
 edit_summary are that sweep's output at the suite's defaults.
+
+Three of the cases are ADD edits, which put a third ball -- the yellow
+one-ball, hidden in the table model until an edit calls for it -- somewhere
+on the cue-to-target line. Their positions are stated the way the scene reads
+rather than in table coordinates: a point on the line between two balls, so
+many ball-radii from one of them. All three turn the head-on shot into a
+relay; where the new ball sits decides whether the two impacts land on the
+same frame or a dozen frames apart, which is the thing the edit is asking a
+model to get right.
 """
 
 from __future__ import annotations
@@ -59,7 +68,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_cue_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=9101,
-        dsl="SET cue_ball.mass FROM 0.17 TO 0.85",
+        dsl="SET cue_ball.mass TIMES 5",
         edit_summary=(
             "Cue ball made 5x heavier. The head-on hit no longer swaps "
             "velocities cleanly: the cue drives on behind the target rather "
@@ -73,7 +82,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_target_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=9102,
-        dsl="SET target_ball.mass FROM 0.17 TO 1.7",
+        dsl="SET target_ball.mass TIMES 10",
         edit_summary=(
             "Target ball made 10x heavier. The cue bounces back off it and "
             "the target barely reacts: cue displacement 0.26 m (much of that "
@@ -85,7 +94,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_hard_break",
         source_case_id=SOURCE_CASE_ID,
         seed=9103,
-        dsl="SET cue_ball.initial_velocity FROM 1.0 TO 4.0",
+        dsl="SET cue_ball.initial_velocity TIMES 4",
         edit_summary=(
             "Cue ball's break speed 4x faster (1.0 -> 4.0 m/s along the "
             "table). Contact happens by frame 4 instead of 13, and the "
@@ -98,7 +107,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_grippy_cue_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=9104,
-        dsl="SET cue_ball.friction FROM 0.15 TO 1.5",
+        dsl="SET cue_ball.friction TIMES 10",
         edit_summary=(
             "Cue ball's friction 10x -- both lateral and rolling coefficients "
             "scale together. The felt now drags the cue to a stop before it "
@@ -117,6 +126,51 @@ EDIT_CASES: tuple[EditCase, ...] = (
         ),
     ),
     EditCase(
+        case_id="edit_add_ball_near_cue",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9107,
+        dsl="ADD yellow_ball BETWEEN cue_ball AND target_ball AT 1/4 FROM cue_ball",
+        edit_summary=(
+            "A yellow one-ball placed at the quarter point of the "
+            "cue-to-target line nearest the cue. The cue reaches it on "
+            "frame 3 and stops there having moved only 0.12 m; the yellow "
+            "ball inherits the shot, runs 0.41 m down the felt and "
+            "reaches the target on frame 14. The target ends up 0.32 m "
+            "along, well past the baseline's 0.12 m, because the handoff "
+            "happens before the felt has taken much off the roll."
+        ),
+    ),
+    EditCase(
+        case_id="edit_add_ball_midway",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9108,
+        dsl="ADD yellow_ball BETWEEN cue_ball AND target_ball AT MIDPOINT",
+        edit_summary=(
+            "A yellow one-ball placed at the midpoint of the "
+            "cue-to-target line. The shot becomes an even three-stage "
+            "relay: the cue reaches it on frame 7, it reaches the target "
+            "on frame 14, and each ball stops roughly where the next one "
+            "started -- 0.27 m, 0.26 m and 0.31 m of travel. The clear "
+            "coast between the two impacts is what separates this from "
+            "the near-target case."
+        ),
+    ),
+    EditCase(
+        case_id="edit_add_ball_near_target",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9109,
+        dsl="ADD yellow_ball BETWEEN cue_ball AND target_ball AT 1/4 FROM target_ball",
+        edit_summary=(
+            "A yellow one-ball placed at the quarter point of the "
+            "cue-to-target line nearest the target. The cue runs most of "
+            "its baseline distance, 0.42 m, before it arrives, and the "
+            "two impacts land within a frame of each other -- the second "
+            "on frame 13 -- so it reads as a single crack rather than a "
+            "relay. The yellow ball, blocked immediately by the target, "
+            "shifts only 0.12 m while the target goes 0.31 m."
+        ),
+    ),
+    EditCase(
         case_id="edit_remove_target_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=9106,
@@ -126,6 +180,28 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "the table (~1.21 m of travel) and is still moving at 0.56 m/s "
             "when the shot ends, having reached the far cushion instead of "
             "handing its speed to another ball."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as the case above: they differ by the AT
+    # FRAME clause alone. Taking the target away *after* it has been struck is
+    # what makes the timing carry information -- removing it beforehand would
+    # leave the cue's path identical to the whole-clip version.
+    EditCase(
+        case_id="edit_remove_target_ball_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9107,
+        dsl="DELETE target_ball AT FRAME 18",
+        edit_summary=(
+            "Target ball removed at frame 18, five frames after the cue "
+            "strikes it at frame 13. Frames 1-17 are the source video frame "
+            "for frame, the impact included: the cue hands its speed over and "
+            "stops dead at y=-0.10, and the target is already 0.14 m up the "
+            "table when it disappears. Nothing moves for the rest of the clip. "
+            "The whole-clip version of the same delete "
+            "(edit_remove_target_ball) is a different video again: with no "
+            "target to hit, the cue never stops -- at frame 18 it is at "
+            "y=+0.08 still doing 0.92 m/s, and it runs on to the far cushion."
         ),
     ),
 )
@@ -243,15 +319,29 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
+    elif isinstance(parsed, dsl.AddEdit):
+        diff = {parsed.object_id: {
+            "from": "absent",
+            "to": "present",
+            # Both halves: the division point the edit was written as, and the
+            # centre it resolves to, so a consumer can score a predicted
+            # placement without re-running the resolver.
+            "position": dsl.add_position_diff(parsed, VOCAB),
+        }}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -266,6 +356,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -288,6 +379,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -305,6 +407,7 @@ def main() -> None:
             "diff are all derived from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -319,13 +422,33 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. Two identical billiard balls "
-            "on the pool felt; the cue ball is pushed at 1.0 m/s along +Y "
-            "and hits the target ball head-on. The cue stops dead on contact "
-            "and the target rolls forward ~0.62 m before friction brings it "
-            "to rest."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The cue ball is pushed along the felt at the target ball "
+                    "and hits it head-on. The cue ball stops dead on contact "
+                    "and the target ball rolls forward before friction brings "
+                    "it to rest."
+                ),
+                "zh": (
+                    "母球沿台面被推向目标球并正面撞上。母球接触瞬间停死,目标球向"
+                    "前滚一段后被摩擦停住。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The cue ball is pushed at 1.0 m/s and hits the target "
+                    "ball head-on on frame 15 after 0.57 m of travel. The cue "
+                    "ball stops dead on contact and the target ball rolls "
+                    "forward 0.12 m before friction brings it to rest."
+                ),
+                "zh": (
+                    "母球以 1.0 m/s 被推出,滚过 0.57 m 后在第 "
+                    "15 帧正撞上目标球。母球接触瞬间停死,目标球向前滚 0.1"
+                    "2 m 后被摩擦停住。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -369,6 +492,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

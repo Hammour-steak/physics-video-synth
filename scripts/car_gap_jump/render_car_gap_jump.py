@@ -112,6 +112,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=31)
     parser.add_argument("--launch-speed", type=float, default=2.0)
     parser.add_argument("--gap-width", type=float, default=0.28)
+    # Edits that land partway through the clip. This scene's suite drives the
+    # renderer through CLI flags rather than a scenario_overrides.json, so the
+    # schedule arrives as a path and is handed straight to the simulator.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     parser.add_argument(
         "--car-friction", type=float, default=0.45,
         help="Forwarded to simulate_car_gap_jump.py; see there for defaults.",
@@ -587,7 +591,9 @@ def run_physics(args: argparse.Namespace) -> dict:
             "--launch-speed", str(float(args.launch_speed)),
             "--gap-width", str(float(args.gap_width)),
             "--car-friction", str(float(args.car_friction)),
-        ],
+        ]
+        + (["--timed-edits-json", str(args.timed_edits_json)]
+           if args.timed_edits_json else []),
         check=True,
     )
     data = json.loads(out.read_text(encoding="utf-8"))

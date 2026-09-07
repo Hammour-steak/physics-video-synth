@@ -18,8 +18,8 @@ it cannot jump the gap.
   domino GLB, keeps the tabletop plane and one domino tile, duplicates the
   tile into a row, and applies the physics trajectories as keyframes.
 - `batch_render_domino_chain.py` – orchestrates multiple randomized renders.
-- `build_pcve_domino_chain.py` – builds a named PCVE benchmark suite with
-  five parameter variations.
+- `build_pcve_domino_chain.py` – builds a named PCVE benchmark suite: six
+  whole-clip edits plus one that lands at frame 24.
 
 ## Quick start
 

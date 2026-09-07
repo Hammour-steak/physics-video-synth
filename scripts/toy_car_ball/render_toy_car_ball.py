@@ -23,6 +23,7 @@ DIRECT_MP4_NAME = f"{OUTPUT_STEM}.mp4"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
 # Geometry matches simulate_toy_car_ball.py. The car and ball travel along
@@ -498,6 +499,14 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
 
     script_path = Path(__file__).with_name("simulate_toy_car_ball.py")
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     subprocess.run(
         [
             python,
@@ -534,11 +543,13 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             str(float(physics["gravity"][2])),
             "--ball-active",
             str(int(physics.get("active", [1, 1])[1])),
-        ],
+        ]
+        + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
         check=True,
     )
     records = json.loads(physics_path.read_text(encoding="utf-8"))
     physics_path.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return records
 
 
@@ -571,6 +582,38 @@ def apply_physics_animation(
             obj.keyframe_insert(data_path="location", frame=frame)
             obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
     set_linear_keyframes([car] + ([ball] if animate_ball else []))
+    if animate_ball:
+        apply_disappearance(ball, physics)
+
+
+def removal_frame(physics: dict) -> int | None:
+    """The first frame the ball is absent on, if it starts out present."""
+    frames = physics["frames"]
+    if not frames or not frames[0]["ball"]["present"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames
+                 if not f["ball"]["present"]), None)
+
+
+def apply_disappearance(ball: bpy.types.Object, physics: dict) -> None:
+    """Make a ball the simulation removed mid-run leave the picture.
+
+    A whole-clip delete hides the ball before any keyframe is written; this is
+    the other kind, where it is pushed, rolls, and then is gone. CONSTANT
+    interpolation so it vanishes between two frames rather than fading.
+    """
+    gone_at = removal_frame(physics)
+    if gone_at is None or gone_at <= 1:
+        return
+    for path in ("hide_viewport", "hide_render"):
+        setattr(ball, path, False)
+        ball.keyframe_insert(data_path=path, frame=gone_at - 1)
+        setattr(ball, path, True)
+        ball.keyframe_insert(data_path=path, frame=gone_at)
+    for fcurve in ball.animation_data.action.fcurves:
+        if fcurve.data_path in ("hide_viewport", "hide_render"):
+            for key in fcurve.keyframe_points:
+                key.interpolation = "CONSTANT"
 
 
 def export_ground_truth(
@@ -593,7 +636,14 @@ def export_ground_truth(
         "physics": {key: value for key, value in physics.items() if key != "frames"},
         "objects": {
             "car": {"object_name": car.name},
-            "ball": {"present": not bool(ball.hide_render), "object_name": ball.name},
+            "ball": {
+                "present": bool(physics["frames"][0]["ball"]["present"]),
+                "object_name": ball.name,
+                # The frame it stops being on screen, for a ball a timed edit
+                # takes away partway through; None when it is there for the
+                # whole clip.
+                "removed_at_frame": removal_frame(physics),
+            },
         },
         "camera": {
             "object_name": camera.name,
@@ -626,7 +676,7 @@ def export_ground_truth(
                 },
                 "ball": (
                     {"present": False}
-                    if bool(ball.hide_render)
+                    if not physics_frame["ball"]["present"]
                     else {
                         "matrix_world": [[float(v) for v in row] for row in ball.matrix_world],
                         "location": [float(v) for v in ball.location],

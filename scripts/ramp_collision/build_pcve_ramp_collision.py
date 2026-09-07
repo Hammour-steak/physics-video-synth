@@ -52,7 +52,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_high_friction_red_stalls",
         source_case_id=SOURCE_CASE_ID,
         seed=2101,
-        dsl="SET red_ball.friction FROM 0.45 TO 1.35",
+        dsl="SET red_ball.friction TIMES 3",
         edit_summary=(
             "Red ball's friction raised 3x (both the lateral coefficient and "
             "the rolling one scale together). Red rolls down the ramp but the "
@@ -74,17 +74,43 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_red_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=2103,
-        dsl="SET red_ball.mass FROM 0.05 TO 1.0",
+        dsl="SET red_ball.mass TIMES 20",
         edit_summary=(
             "Red ball made 20x heavier. Red plows through blue almost without "
             "slowing; blue is knocked much farther than in the baseline."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same factor as edit_high_friction_red_stalls above: the
+    # two differ by the AT FRAME clause alone and render as completely
+    # different videos, which is exactly what a timing-aware model has to get
+    # right. Deleting the blue marble just before the impact was tried first
+    # and dropped -- blue is stationary until it is hit, so removing it at
+    # frame 22 gives red the same trajectory as removing it at frame 1, and the
+    # only difference between the two videos is a motionless marble sitting in
+    # the early frames. A timed edit earns its timing by changing what a body
+    # already in motion does next.
+    EditCase(
+        case_id="edit_grippy_red_ball_mid_roll",
+        source_case_id=SOURCE_CASE_ID,
+        seed=2105,
+        dsl="SET red_ball.friction TIMES 3 AT FRAME 18",
+        edit_summary=(
+            "Red ball's friction raised 3x at frame 18, once it is already off "
+            "the ramp and running at full speed. Frames 1-17 are the source "
+            "video frame for frame; from 18 red visibly slows and comes to "
+            "rest at frame 27, 0.0068 m short of the blue marble -- it grinds "
+            "to a halt against blue's edge without touching it, so neither "
+            "marble is ever moved. The whole-clip version of the same edit "
+            "(edit_high_friction_red_stalls) stalls red 0.21 m short instead: "
+            "same factor, different frame, different video."
         ),
     ),
     EditCase(
         case_id="edit_heavy_blue_marble",
         source_case_id=SOURCE_CASE_ID,
         seed=2104,
-        dsl="SET blue_marble.mass FROM 0.05 TO 2.0",
+        dsl="SET blue_marble.mass TIMES 40",
         edit_summary=(
             "Blue marble made 40x heavier. Red hits blue and stops dead; blue "
             "barely moves instead of rolling forward like in the baseline."
@@ -205,15 +231,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -228,6 +259,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -250,6 +282,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -267,6 +310,7 @@ def main() -> None:
             "from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -281,10 +325,34 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. Red ball rolls down a 12 deg ramp "
-            "and hits the blue and yellow marbles resting on the table."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The red ball rolls down a ramp onto the table towards "
+                    "the blue marble and the yellow marble waiting there. It "
+                    "reaches only the blue marble and nudges it a little; the "
+                    "yellow marble is never touched."
+                ),
+                "zh": (
+                    "红球从斜坡滚下到桌面,冲向停在那里的蓝球和黄球。它只够到蓝球"
+                    "、把它轻轻撞开;黄球始终没被碰到。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The red ball rolls down a 12 deg ramp onto the table "
+                    "towards the blue marble and the yellow marble. It "
+                    "reaches only one of them: the blue marble is nudged 0.07 "
+                    "m and the yellow marble is never touched. The red ball "
+                    "stops 0.26 m from where it set off."
+                ),
+                "zh": (
+                    "红球从 12 度斜坡滚下到桌面,冲向蓝球和黄球。它只够到其中"
+                    "一颗:蓝球被撞开 0.07 m,黄球始终没被碰到。红球相对起"
+                    "点移动 0.26 m 后停下。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -328,6 +396,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

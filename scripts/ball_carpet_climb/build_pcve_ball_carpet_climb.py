@@ -60,7 +60,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_grippy_ball',
         source_case_id=SOURCE_CASE_ID,
         seed=17101,
-        dsl='SET ball.friction FROM 1.0 TO 3.0',
+        dsl='SET ball.friction TIMES 3',
         edit_summary=(
             'Ball made much grippier (friction 3x). It rolls the same bare floor '
             'in, but the moment it touches the rug the extra rolling resistance '
@@ -72,7 +72,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_slippy_ball',
         source_case_id=SOURCE_CASE_ID,
         seed=17102,
-        dsl='SET ball.friction FROM 1.0 TO 0.3',
+        dsl='SET ball.friction TIMES 0.3',
         edit_summary=(
             'Ball made much slicker (friction 0.3x). The rug barely slows it: it '
             'coasts across the full 1.11 m of pile and comes to rest against the '
@@ -83,23 +83,23 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_soft_push',
         source_case_id=SOURCE_CASE_ID,
         seed=17103,
-        dsl='SET ball.initial_velocity FROM 2.05 TO 1.30',
+        dsl='SET ball.initial_velocity TIMES 0.6',
         edit_summary=(
-            'Gentler push. The ball reaches the rug at 1.25 m/s instead of the '
-            "baseline's 2.0 m/s and dies almost immediately after the border, "
-            'stopping ~0.19 m in -- a rug-edge stall driven by the weaker start, '
-            'not by a grippier surface.'
+            "Gentler push. The ball reaches the rug at 1.23 m/s instead "
+            "of 2.05 and stalls soon after the border, covering 0.75 m "
+            "against the baseline's 1.09 -- a rug-edge stall driven by "
+            "the weaker start, not by a grippier surface."
         ),
     ),
     EditCase(
         case_id='edit_hard_push',
         source_case_id=SOURCE_CASE_ID,
         seed=17104,
-        dsl='SET ball.initial_velocity FROM 2.05 TO 3.00',
+        dsl='SET ball.initial_velocity TIMES 1.5',
         edit_summary=(
-            'Firmer push. The ball hits the rug at ~2.9 m/s and carries all the '
-            'way across the pile, stopping against the front of the sofa instead '
-            'of half a metre in.'
+            "Firmer push. The ball meets the rug at 3.08 m/s instead of "
+            "2.05 and carries all the way across the pile, finishing 1.72 "
+            "m up the room against the baseline's 1.09 m."
         ),
     ),
 )
@@ -217,15 +217,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f'{parsed.property_name} ({parsed.object_id})':
                 {'from': dsl.baseline_value_for(parsed, VOCAB), 'to': parsed.to_value}}
     else:
         diff = {parsed.object_id: {'from': 'present', 'to': 'removed'}}
+    diff['timing'] = dsl.timing_diff(parsed, VOCAB)
     return {
         'edit_dsl': case.dsl,
         'edit_summary': case.edit_summary,
+        'applies_from_frame': dsl.starts_at_frame(parsed),
         'prompts': dsl.make_prompts(parsed, VOCAB),
         'physics_diff': diff,
         'physics_override': physics,
@@ -240,6 +245,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         'source_case_id': case.source_case_id,
         'edit_dsl': edit_info['edit_dsl'],
         'edit_summary': edit_info['edit_summary'],
+        'applies_from_frame': edit_info['applies_from_frame'],
         'physics_diff': edit_info['physics_diff'],
         'prompts': edit_info['prompts'],
     })
@@ -262,6 +268,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -279,6 +296,7 @@ def main() -> None:
             'the physics diff are all derived from that one string.'
         ),
         'baseline_physics': BASELINE_PHYSICS,
+        'total_frames': edit_vocab.TOTAL_FRAMES,
         'resolution': [int(args.resolution[0]), int(args.resolution[1])],
         'fps': int(args.fps),
         'duration_sec': float(args.duration_sec),
@@ -293,12 +311,30 @@ def main() -> None:
     source_record: dict[str, Any] = {
         'case_id': SOURCE_CASE_ID,
         'kind': 'source',
-        'description': (
-            'Source video: baseline parameters. The volleyball is rolled at '
-            '2.05 m/s across ~0.5 m of bare floor, reaches the flush rug at '
-            '~2.0 m/s and comes to rest ~0.49 m onto the rug, next to the '
-            'coffee table.'
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The volleyball is rolled across bare floor onto a rug "
+                    "lying flush with it, and the pile drags it to a stop "
+                    "beside the coffee table."
+                ),
+                "zh": (
+                    "排球滚过裸地板,上到与地面齐平的地毯上,被绒毛拖停在茶几旁。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The volleyball is rolled at 2.05 m/s across bare floor, "
+                    "reaches the flush rug, and is brought to rest by the "
+                    "pile after 1.09 m of travel in all, beside the coffee "
+                    "table."
+                ),
+                "zh": (
+                    "排球以 2.05 m/s 滚过裸地板,上到与地面齐平的地毯上"
+                    ",被绒毛拖停,全程移动 1.09 m,停在茶几旁。"
+                ),
+            },
+        },
         'case_dir': str(source_dir.resolve()),
         'status': 'pending',
     }
@@ -342,6 +378,7 @@ def main() -> None:
             'prompts_json': str(prompts_path.resolve()),
             'edit_dsl': edit_info['edit_dsl'],
             'edit_summary': edit_info['edit_summary'],
+            'applies_from_frame': edit_info['applies_from_frame'],
             'physics_diff': edit_info['physics_diff'],
             'prompts': edit_info['prompts'],
             'status': 'pending',

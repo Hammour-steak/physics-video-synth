@@ -26,6 +26,7 @@ DIRECT_MP4_NAME = f"{OUTPUT_STEM}.mp4"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
 SCENE_SCALE = 1.0 / 3.0
@@ -33,6 +34,12 @@ SCENE_SCALE = 1.0 / 3.0
 GREEN_MESH_NAME = "green_pool_grass_text_0"
 CUE_BALL_MESH_NAME = "pool_ball_16_pool_ball_white_text_0"
 TARGET_BALL_MESH_NAME = "pool_ball_8_pool_ball_8_text_0"
+# The ball a PCVE ADD edit puts on the felt. The table model ships the whole
+# rack and this renderer hides the balls the shot does not use, so "adding" a
+# ball is un-hiding one that was always in the file -- it arrives with its own
+# number and colour, and reads at a glance against both the white cue and the
+# black eight.
+EXTRA_BALL_MESH_NAME = "pool_ball_1_pool_ball_1_text_0"
 
 CAMERA_LOCATION = (1.1, -1.85, 1.4)
 CAMERA_TARGET_OFFSET = (0.0, 0.0, 0.01)
@@ -144,7 +151,9 @@ def prepare_active_ball(obj: bpy.types.Object) -> None:
     obj.select_set(False)
 
 
-def import_pool_table(scene_lower_z: float = 0.0) -> tuple[bpy.types.Object, bpy.types.Object, bpy.types.Object]:
+def import_pool_table(
+    scene_lower_z: float = 0.0,
+) -> tuple[bpy.types.Object, bpy.types.Object, bpy.types.Object, bpy.types.Object]:
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
     for name in ("Cube", "Light", "Camera"):
@@ -166,6 +175,7 @@ def import_pool_table(scene_lower_z: float = 0.0) -> tuple[bpy.types.Object, bpy
     green_obj = bpy.data.objects.get(GREEN_MESH_NAME)
     cue_obj = bpy.data.objects.get(CUE_BALL_MESH_NAME)
     target_obj = bpy.data.objects.get(TARGET_BALL_MESH_NAME)
+    extra_obj = bpy.data.objects.get(EXTRA_BALL_MESH_NAME)
 
     if green_obj is None:
         raise RuntimeError(f"Green surface mesh not found: {GREEN_MESH_NAME}")
@@ -173,8 +183,10 @@ def import_pool_table(scene_lower_z: float = 0.0) -> tuple[bpy.types.Object, bpy
         raise RuntimeError(f"Cue ball mesh not found: {CUE_BALL_MESH_NAME}")
     if target_obj is None:
         raise RuntimeError(f"Target ball mesh not found: {TARGET_BALL_MESH_NAME}")
+    if extra_obj is None:
+        raise RuntimeError(f"Extra ball mesh not found: {EXTRA_BALL_MESH_NAME}")
 
-    return green_obj, cue_obj, target_obj
+    return green_obj, cue_obj, target_obj, extra_obj
 
 
 def create_scenario(args: argparse.Namespace) -> dict[str, object]:
@@ -203,7 +215,15 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "lens_mm": CAMERA_LENS_MM,
             },
             "physics": {
-                "ball_radius": 0.05715,
+                # Measured off the table model, and the same number the
+                # renderer writes back over this key in build_scene before the
+                # simulator ever sees it -- a regulation 57.15 mm ball, so
+                # 28.8 mm of radius. It read 0.05715 here until the ADD edits
+                # went in: harmless while nothing consumed the placeholder,
+                # but the PCVE geometry anchors turn "3 radii" into metres
+                # with it, and at the ball's diameter every ADD would have
+                # landed at twice the distance its prompt claims.
+                "ball_radius": 0.0288317501544952,
                 # Per-ball fields (the PCVE edit surface). Two identical
                 # billiard balls at baseline; an edit names one of them and
                 # writes at its slot. The globals (ball_*) below stay as
@@ -220,9 +240,20 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "target_restitution": 0.90,
                 "target_rolling_friction": 0.02,
                 "target_spinning_friction": 0.02,
-                # Two-slot presence list, in fixed order (cue, target). A
-                # PCVE DELETE edit writes 0 at the ball's slot.
-                "active": [1, 1],
+                # The yellow one-ball: absent from the baseline shot, so its
+                # physics sits here unused until a PCVE ADD edit turns slot 2
+                # of `active` on and overwrites its location.
+                "extra_mass": 0.17,
+                "extra_friction": 0.15,
+                "extra_restitution": 0.90,
+                "extra_rolling_friction": 0.02,
+                "extra_spinning_friction": 0.02,
+                "extra_initial_location": [0.0, -0.3, 0.0],
+                # Three-slot presence list, in fixed order (cue, target,
+                # yellow). A PCVE DELETE edit writes 0 at a ball's slot; an
+                # ADD edit writes 1 at the yellow ball's, which is the one
+                # slot that reads 0 at baseline.
+                "active": [1, 1, 0],
                 "ball_mass": 0.17,
                 "ball_friction": 0.15,
                 "ball_restitution": 0.90,
@@ -282,6 +313,14 @@ def run_physics_simulation(
 
     script_path = Path(__file__).with_name("simulate_pool_collision.py")
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
 
     def vec3(name: str) -> list[float]:
         value = physics.get(name)
@@ -291,8 +330,14 @@ def run_physics_simulation(
 
     cue_loc = vec3("cue_initial_location")
     target_loc = vec3("target_initial_location")
+    extra_loc = vec3("extra_initial_location")
     cue_vel = vec3("cue_initial_velocity")
     gravity = vec3("gravity")
+    # Scenarios written before the yellow ball existed carry a two-slot
+    # `active`; read the third slot defensively so those still replay.
+    active = list(physics.get("active", [1, 1, 0]))
+    while len(active) < 3:
+        active.append(0)
 
     subprocess.run(
         [
@@ -352,13 +397,26 @@ def run_physics_simulation(
             "--target-restitution", str(float(physics["target_restitution"])),
             "--target-rolling-friction",  str(float(physics["target_rolling_friction"])),
             "--target-spinning-friction", str(float(physics["target_spinning_friction"])),
-            "--cue-active",    str(int(physics["active"][0])),
-            "--target-active", str(int(physics["active"][1])),
-        ],
+            "--extra-mass",         str(float(physics.get("extra_mass", physics["ball_mass"]))),
+            "--extra-friction",     str(float(physics.get("extra_friction", physics["ball_friction"]))),
+            "--extra-restitution",  str(float(physics.get("extra_restitution", physics["ball_restitution"]))),
+            "--extra-rolling-friction",
+            str(float(physics.get("extra_rolling_friction", physics["ball_rolling_friction"]))),
+            "--extra-spinning-friction",
+            str(float(physics.get("extra_spinning_friction", physics["ball_spinning_friction"]))),
+            "--extra-x", str(extra_loc[0]),
+            "--extra-y", str(extra_loc[1]),
+            "--extra-z", str(extra_loc[2]),
+            "--cue-active",    str(int(active[0])),
+            "--target-active", str(int(active[1])),
+            "--extra-active",  str(int(active[2])),
+        ]
+        + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
         check=True,
     )
     records = json.loads(physics_path.read_text(encoding="utf-8"))
     physics_path.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return records
 
 
@@ -452,12 +510,12 @@ def setup_world_and_lights(scenario: dict[str, object]) -> None:
 def build_scene(
     args: argparse.Namespace,
     scenario: dict[str, object],
-) -> tuple[bpy.types.Object, bpy.types.Object, bpy.types.Object]:
+) -> tuple[bpy.types.Object, bpy.types.Object, bpy.types.Object, bpy.types.Object]:
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     scene_lower_z = float(scenario.get("scene_lower_z", 0.0))
-    green_obj, cue_obj, target_obj = import_pool_table(scene_lower_z)
+    green_obj, cue_obj, target_obj, extra_obj = import_pool_table(scene_lower_z)
 
     scene = bpy.context.scene
     scene.render.resolution_x = args.resolution[0]
@@ -477,13 +535,17 @@ def build_scene(
 
     prepare_active_ball(cue_obj)
     prepare_active_ball(target_obj)
+    prepare_active_ball(extra_obj)
 
-    # Hide the remaining balls and the cue sticks so they do not obstruct the shot.
+    # Hide the remaining balls and the cue sticks so they do not obstruct the
+    # shot. The yellow ball is spared here and hidden below only if the
+    # scenario leaves its slot off, which is what makes it "addable".
+    balls_in_play = (cue_obj, target_obj, extra_obj)
     for obj in bpy.data.objects:
         if obj.type != "MESH":
             continue
         parent_name = obj.parent.name if obj.parent else ""
-        is_other_ball = obj.name.startswith("pool_ball_") and obj not in (cue_obj, target_obj)
+        is_other_ball = obj.name.startswith("pool_ball_") and obj not in balls_in_play
         is_cue_stick = "_stick_" in obj.name.lower() or "pool_stick" in obj.name.lower()
         if is_other_ball or is_cue_stick:
             obj.hide_viewport = True
@@ -520,18 +582,22 @@ def build_scene(
 
     cue_loc = physics.get("cue_initial_location", [0.0, -0.6, 0.0])
     target_loc = physics.get("target_initial_location", [0.0, 0.0, 0.0])
+    extra_loc = physics.get("extra_initial_location", [0.0, -0.3, 0.0])
 
     cue_obj.location = (float(cue_loc[0]), float(cue_loc[1]), surface_z + ball_radius + float(cue_loc[2]))
     target_obj.location = (float(target_loc[0]), float(target_loc[1]), surface_z + ball_radius + float(target_loc[2]))
+    extra_obj.location = (float(extra_loc[0]), float(extra_loc[1]), surface_z + ball_radius + float(extra_loc[2]))
 
-    # DELETE edit: hide the removed ball from render and viewport.
-    active = physics.get("active", [1, 1])
-    if not int(active[0]):
-        cue_obj.hide_viewport = True
-        cue_obj.hide_render = True
-    if not int(active[1]):
-        target_obj.hide_viewport = True
-        target_obj.hide_render = True
+    # Presence: a DELETE edit hides the ball it removed, and the yellow ball
+    # is hidden unless an ADD edit turned its slot on. Same mechanism read
+    # from the same list.
+    active = list(physics.get("active", [1, 1, 0]))
+    while len(active) < 3:
+        active.append(0)
+    for obj, slot in zip((cue_obj, target_obj, extra_obj), active):
+        if not int(slot):
+            obj.hide_viewport = True
+            obj.hide_render = True
 
     # Update scenario with the actual values used for physics and rendering.
     physics["ball_radius"] = ball_radius
@@ -545,63 +611,78 @@ def build_scene(
     if camera is None:
         raise RuntimeError("Render camera was not created")
 
-    return cue_obj, target_obj, camera
+    return cue_obj, target_obj, extra_obj, camera
 
 
 def apply_physics_animation(
-    cue_ball: bpy.types.Object,
-    target_ball: bpy.types.Object,
+    balls: "list[tuple[bpy.types.Object, str]]",
     physics: dict,
 ) -> None:
-    # A hidden ball (DELETE edit) does not need keyframes -- its frozen
-    # position was already set in build_scene. Skip animating it.
-    animate_cue = not bool(cue_ball.hide_render)
-    animate_target = not bool(target_ball.hide_render)
+    """Keyframe each ball from its per-frame sim record.
 
-    if animate_cue:
-        cue_ball.rotation_mode = "QUATERNION"
-    if animate_target:
-        target_ball.rotation_mode = "QUATERNION"
+    ``balls`` pairs each Blender object with the prefix the simulator writes
+    it under (``cue_ball``, ``target_ball``, ``extra_ball``). A hidden ball --
+    one a DELETE edit removed, or the yellow ball when no ADD edit placed it --
+    needs no keyframes: build_scene already parked it at its frozen position.
+    """
+    animated = []
+    for obj, prefix in balls:
+        if obj.hide_render:
+            continue
+        obj.rotation_mode = "QUATERNION"
+        animated.append((obj, prefix))
 
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
+        for obj, prefix in animated:
+            quat = frame_record[f"{prefix}_quaternion_xyzw"]
+            obj.location = frame_record[f"{prefix}_location"]
+            # Blender wants w first, the simulator hands over w last.
+            obj.rotation_quaternion = (quat[3], quat[0], quat[1], quat[2])
+            obj.keyframe_insert(data_path="location", frame=frame)
+            obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-        if animate_cue:
-            cue_quat = frame_record["cue_ball_quaternion_xyzw"]
-            cue_ball.location = frame_record["cue_ball_location"]
-            cue_ball.rotation_quaternion = (
-                cue_quat[3],
-                cue_quat[0],
-                cue_quat[1],
-                cue_quat[2],
-            )
-            cue_ball.keyframe_insert(data_path="location", frame=frame)
-            cue_ball.keyframe_insert(data_path="rotation_quaternion", frame=frame)
+    set_linear_keyframes([obj for obj, _ in animated])
+    apply_disappearances(animated, physics)
 
-        if animate_target:
-            target_quat = frame_record["target_ball_quaternion_xyzw"]
-            target_ball.location = frame_record["target_ball_location"]
-            target_ball.rotation_quaternion = (
-                target_quat[3],
-                target_quat[0],
-                target_quat[1],
-                target_quat[2],
-            )
-            target_ball.keyframe_insert(data_path="location", frame=frame)
-            target_ball.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
-    animated = []
-    if animate_cue:
-        animated.append(cue_ball)
-    if animate_target:
-        animated.append(target_ball)
-    set_linear_keyframes(animated)
+def removal_frame(physics: dict, prefix: str) -> int | None:
+    """The first frame ``prefix`` is absent on, if it starts out present."""
+    frames = physics["frames"]
+    if not frames or not frames[0][f"{prefix}_present"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames
+                 if not f[f"{prefix}_present"]), None)
+
+
+def apply_disappearances(
+    animated: "list[tuple[bpy.types.Object, str]]", physics: dict
+) -> None:
+    """Make a ball the simulation removed mid-run leave the picture.
+
+    A whole-clip delete parks the ball hidden before any keyframe is written;
+    this is the other kind, where it rolls through the frames it has in the
+    source and then is gone. CONSTANT interpolation so it vanishes between two
+    frames rather than fading across them.
+    """
+    for obj, prefix in animated:
+        gone_at = removal_frame(physics, prefix)
+        if gone_at is None or gone_at <= 1:
+            continue
+        for path in ("hide_viewport", "hide_render"):
+            setattr(obj, path, False)
+            obj.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(obj, path, True)
+            obj.keyframe_insert(data_path=path, frame=gone_at)
+        for fcurve in obj.animation_data.action.fcurves:
+            if fcurve.data_path in ("hide_viewport", "hide_render"):
+                for key in fcurve.keyframe_points:
+                    key.interpolation = "CONSTANT"
 
 
 def export_ground_truth(
     out_dir: Path,
-    cue_ball: bpy.types.Object,
-    target_ball: bpy.types.Object,
+    balls: "list[tuple[bpy.types.Object, str]]",
     camera: bpy.types.Object,
     frame_end: int,
     fps: int,
@@ -621,16 +702,16 @@ def export_ground_truth(
         "scenario_metadata_path": str(output_path(out_dir, SCENARIO_METADATA_NAME)),
         "physics": {key: value for key, value in physics.items() if key != "frames"},
         "objects": {
-            "cue_ball": {
-                "present": not bool(cue_ball.hide_render),
-                "object_name": cue_ball.name,
+            prefix: {
+                "present": bool(physics["frames"][0][f"{prefix}_present"]),
+                "object_name": obj.name,
                 "radius_m_scene_units": ball_radius,
-            },
-            "target_ball": {
-                "present": not bool(target_ball.hide_render),
-                "object_name": target_ball.name,
-                "radius_m_scene_units": ball_radius,
-            },
+                # The frame it stops being on screen, for a ball a timed edit
+                # takes away partway through; None when it is there for the
+                # whole clip (or was never there at all).
+                "removed_at_frame": removal_frame(physics, prefix),
+            }
+            for obj, prefix in balls
         },
         "camera": {
             "object_name": camera.name,
@@ -655,28 +736,30 @@ def export_ground_truth(
     for frame in range(1, frame_end + 1):
         scene.frame_set(frame)
         physics_frame = physics_by_frame[frame]
-        records["frames"].append(
-            {
-                "frame_index": frame,
-                "time_sec": (frame - 1) / float(fps),
-                "cue_ball_matrix_world": [[float(v) for v in row] for row in cue_ball.matrix_world],
-                "cue_ball_location": [float(v) for v in cue_ball.location],
-                "cue_ball_linear_velocity": physics_frame["cue_ball_linear_velocity"],
-                "cue_ball_angular_velocity": physics_frame["cue_ball_angular_velocity"],
-                "cue_ball_table_gap": physics_frame["cue_ball_table_gap"],
-                "target_ball_matrix_world": [[float(v) for v in row] for row in target_ball.matrix_world],
-                "target_ball_location": [float(v) for v in target_ball.location],
-                "target_ball_linear_velocity": physics_frame["target_ball_linear_velocity"],
-                "target_ball_angular_velocity": physics_frame["target_ball_angular_velocity"],
-                "target_ball_table_gap": physics_frame["target_ball_table_gap"],
-                "ball_ball_gap": physics_frame["ball_ball_gap"],
-                "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world],
-                "camera_world_to_camera_matrix": [
-                    [float(v) for v in row]
-                    for row in camera.matrix_world.inverted()
-                ],
-            }
-        )
+        record = {
+            "frame_index": frame,
+            "time_sec": (frame - 1) / float(fps),
+        }
+        for obj, prefix in balls:
+            record[f"{prefix}_present"] = bool(physics_frame[f"{prefix}_present"])
+            record[f"{prefix}_matrix_world"] = [
+                [float(v) for v in row] for row in obj.matrix_world
+            ]
+            record[f"{prefix}_location"] = [float(v) for v in obj.location]
+            for field in ("linear_velocity", "angular_velocity", "table_gap"):
+                record[f"{prefix}_{field}"] = physics_frame[f"{prefix}_{field}"]
+        # Pair separations, so a consumer can find the contact frames without
+        # recomputing distances from the matrices.
+        for gap in ("ball_ball_gap", "cue_extra_gap", "extra_target_gap"):
+            if gap in physics_frame:
+                record[gap] = physics_frame[gap]
+        record["camera_matrix_world"] = [
+            [float(v) for v in row] for row in camera.matrix_world
+        ]
+        record["camera_world_to_camera_matrix"] = [
+            [float(v) for v in row] for row in camera.matrix_world.inverted()
+        ]
+        records["frames"].append(record)
 
     output_path(out_dir, GROUND_TRUTH_NAME).write_text(
         json.dumps(records, indent=2),
@@ -721,13 +804,17 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     write_scenario_metadata(out_dir, scenario)
 
-    cue_ball, target_ball, camera = build_scene(args, scenario)
+    cue_ball, target_ball, extra_ball, camera = build_scene(args, scenario)
     physics = run_physics_simulation(args, scenario, scenario["physics"]["surface_z"], scenario["physics"]["ball_radius"])
-    apply_physics_animation(cue_ball, target_ball, physics)
+    balls = [
+        (cue_ball, "cue_ball"),
+        (target_ball, "target_ball"),
+        (extra_ball, "extra_ball"),
+    ]
+    apply_physics_animation(balls, physics)
     export_ground_truth(
         out_dir,
-        cue_ball,
-        target_ball,
+        balls,
         camera,
         bpy.context.scene.frame_end,
         int(args.fps),

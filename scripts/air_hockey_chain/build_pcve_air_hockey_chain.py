@@ -62,7 +62,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_middle_mallet",
         source_case_id=SOURCE_CASE_ID,
         seed=4101,
-        dsl="SET red_mallet.mass FROM 0.12 TO 0.48",
+        dsl="SET red_mallet.mass TIMES 4",
         edit_summary=(
             "Middle mallet made 4x heavier. Momentum is no longer cancelled at "
             "the first impact: blue rebounds backwards up the table instead of "
@@ -75,7 +75,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_last_mallet",
         source_case_id=SOURCE_CASE_ID,
         seed=4102,
-        dsl="SET white_mallet.mass FROM 0.12 TO 1.2",
+        dsl="SET white_mallet.mass TIMES 10",
         edit_summary=(
             "Last mallet made 10x heavier. The first handoff is untouched -- "
             "blue still stops dead on red -- but the second one fails: red "
@@ -88,7 +88,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_striker",
         source_case_id=SOURCE_CASE_ID,
         seed=4103,
-        dsl="SET blue_mallet.mass FROM 0.12 TO 1.2",
+        dsl="SET blue_mallet.mass TIMES 10",
         edit_summary=(
             "The pushed mallet made 10x heavier. Blue keeps 80% of its speed "
             "through the impact and drives on behind red rather than stopping, "
@@ -102,20 +102,22 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_dead_striker_face",
         source_case_id=SOURCE_CASE_ID,
         seed=4104,
-        dsl="SET blue_mallet.restitution FROM 0.95 TO 0.35",
+        dsl="SET blue_mallet.restitution TIMES 0.3",
         edit_summary=(
-            "Soft face on the pushed mallet only, so the first impact is a "
-            "shove (pair restitution 0.33 instead of 0.90) and the second is "
-            "unchanged. Blue keeps 35% of its speed instead of 3% -- it does not "
-            "stop, it slides on behind red -- and red takes only 0.50 m/s down "
-            "the table instead of 0.75."
+            "Soft face on the pushed mallet only, so the first impact is "
+            "a shove rather than a clean handoff. Blue no longer stops on "
+            "contact: it slides on behind red for 1.16 m against the "
+            "baseline's 0.48 m and is still drifting at 0.09 m/s when the "
+            "clip ends. Red leaves the collision at 0.51 m/s instead of "
+            "0.75, and what reaches white is down to 0.35 m/s -- half the "
+            "baseline's 0.70."
         ),
     ),
     EditCase(
         case_id="edit_grippy_striker",
         source_case_id=SOURCE_CASE_ID,
         seed=4105,
-        dsl="SET blue_mallet.friction FROM 0.06 TO 1.5",
+        dsl="SET blue_mallet.friction TIMES 25",
         edit_summary=(
             "The pushed mallet's base made to grip instead of glide -- as if it "
             "alone had lost its air cushion. PyBullet multiplies the pair, so "
@@ -130,13 +132,39 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
         seed=4106,
-        dsl="SET blue_mallet.initial_velocity FROM 0.8 TO 0.3",
+        dsl="SET blue_mallet.initial_velocity TIMES 0.4",
         edit_summary=(
-            "Everything correct but the push is too gentle. Blue still coasts "
-            "the length of the gap and still stops dead on red -- the collision "
-            "physics is untouched -- but red leaves with only 0.22 m/s, runs out "
-            "of momentum 24 cm short of white, and the chain dies one link "
-            "early. White never moves."
+            "Everything correct but the push is too gentle. Blue still "
+            "coasts the length of the gap and still stops dead on red -- "
+            "the collision physics is untouched -- but red leaves at only "
+            "0.23 m/s, is still crawling at 0.15 m/s after 0.44 m, and "
+            "never covers the 0.60 m to white. The white mallet does not "
+            "move at all, so the chain dies one link early."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_middle_mallet below: the two
+    # differ by the AT FRAME clause alone and render as three-way distinct
+    # videos against the source. Taking the red mallet away *after* it has been
+    # struck is what makes the timing carry information -- removing a body that
+    # has not moved or touched anything yet would leave every other trajectory
+    # in the clip identical to the whole-clip version.
+    EditCase(
+        case_id="edit_remove_middle_mallet_mid_slide",
+        source_case_id=SOURCE_CASE_ID,
+        seed=4109,
+        dsl="DELETE red_mallet AT FRAME 22",
+        edit_summary=(
+            "Middle mallet removed at frame 22, six frames after blue hands "
+            "off to it and nine before it would have reached white. Frames "
+            "1-21 are the source video frame for frame, first impact included: "
+            "blue is left standing at x=1.31 having given nearly all of its "
+            "speed away, red slides on and then is gone at x=1.02, and white "
+            "is never touched -- it is still at its start, x=0.598, on the "
+            "last frame. One handoff instead of two. The whole-clip version of "
+            "the same delete (edit_remove_middle_mallet) is a different video "
+            "again: with no red mallet to hit, blue never stops, coasts the "
+            "length of the table and strikes white itself at frame 35."
         ),
     ),
     EditCase(
@@ -164,6 +192,30 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "instead of handing over at the three-quarter point."
         ),
     ),
+    # --- ADD: a fourth mallet inserted into the last handoff ---------------
+    # Restricted to the band edit_vocab.ADD_RADII_BAND documents: outside
+    # 3.5-5.0 radii the four-body chain loses energy in the contact solver
+    # rather than passing (1+e)/2 along each impact. k=4 sits in the middle of
+    # the verified run, so a placement error of about half a radius either way
+    # still lands on correct physics. check_add_case() enforces this.
+    EditCase(
+        case_id="edit_add_mallet_last_gap",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9210,
+        dsl="ADD green_mallet BETWEEN red_mallet AND white_mallet AT MIDPOINT",
+        edit_summary=(
+            "A fourth mallet set down at the midpoint of the red-to-white "
+            "line. The relay gains a stage: blue still hands off after "
+            "its usual 0.48 m, but red now runs only 0.18 m before it "
+            "meets green instead of 0.49 m to reach white. Green carries "
+            "the push the remaining 0.43 m, and white finishes with 0.52 "
+            "m of travel against the baseline's 0.49 m. Each striker "
+            "still stops close to where it hits, so the extra handoff "
+            "reads as a pause in the middle of the table rather than as a "
+            "loss of reach."
+        ),
+    ),
+
 )
 
 
@@ -284,15 +336,32 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
+    elif isinstance(parsed, dsl.AddEdit):
+        # Fails loudly here rather than shipping degraded physics as
+        # ground truth; see edit_vocab.ADD_RADII_BAND.
+        edit_vocab.check_add_case(parsed)
+        diff = {parsed.object_id: {
+            "from": "absent",
+            "to": "present",
+            # Both halves: the division point the edit was written as, and the
+            # centre it resolves to, so a consumer can score a predicted
+            # placement without re-running the resolver.
+            "position": dsl.add_position_diff(parsed, VOCAB),
+        }}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -307,6 +376,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -329,6 +399,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -346,6 +427,7 @@ def main() -> None:
             "from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -360,13 +442,35 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. Three identical mallets sit on "
-            "the quarter, half and three-quarter points of an arcade air-hockey "
-            "table; the far one is pushed at 0.8 m/s, and each striker stops "
-            "dead where it hits, handing its speed to the next. White carries "
-            "88% of the original push into the near rail."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The blue mallet is pushed along the table into the red "
+                    "mallet, stops where it hits and hands its speed on; the "
+                    "red mallet passes it to the white mallet the same way, "
+                    "and the white one carries the push on to the near rail."
+                ),
+                "zh": (
+                    "蓝色球槌沿桌面被推向红色球槌,撞上后停在原地、把速度交出去;"
+                    "红色球槌照样把速度交给白色球槌,白色球槌再把这股推力带向近端"
+                    "围板。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "Three identical mallets sit in a line 0.60 m apart. The "
+                    "blue mallet is pushed at 0.8 m/s into the red mallet and "
+                    "stops there; the red mallet goes on into the white "
+                    "mallet and stops in turn. All three end up having "
+                    "travelled about the same 0.49 m."
+                ),
+                "zh": (
+                    "三个相同的球槌成一列排开,间距 0.60 m。蓝色球槌以 0"
+                    ".8 m/s 被推向红色球槌并停住,红色球槌又撞上白色球槌后"
+                    "停住。三个球槌的行程都在 0.49 m 上下。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -414,6 +518,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

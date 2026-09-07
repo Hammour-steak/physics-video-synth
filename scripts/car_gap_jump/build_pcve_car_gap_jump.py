@@ -74,49 +74,77 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_underpowered',
         source_case_id=SOURCE_CASE_ID,
         seed=32,
-        dsl='SET car.initial_velocity FROM 1.9 TO 1.4',
+        dsl='SET car.initial_velocity TIMES 0.75',
         edit_summary=(
-            'Push weakened below the ~1.55 m/s clearance threshold. The car '
-            'noses off the book stack but its arc falls short of the far '
-            'table and it drops into the gap onto the room floor 0.71 m below '
-            "(baseline lands upright on the far table at final_x=+0.78)."
+            "Push weakened below the clearance threshold. The car noses "
+            "off the book stack but its arc falls short of the far table "
+            "and it drops into the gap, landing on the room floor at "
+            "x=+0.01 against the baseline's upright landing on the far "
+            "table at x=+0.87."
         ),
     ),
     EditCase(
         case_id='edit_overpowered',
         source_case_id=SOURCE_CASE_ID,
         seed=33,
-        dsl='SET car.initial_velocity FROM 1.9 TO 3.5',
+        dsl='SET car.initial_velocity TIMES 2',
         edit_summary=(
-            'Push nearly doubled. The car clears the gap easily but has so '
-            'much speed left that it skids straight off the far table and '
-            'ends the clip on the floor beyond it (final_x=+2.81, final_z '
-            "drops below the tabletop)."
+            "Push doubled. The car clears the gap easily but has so much "
+            "speed left that it skids straight off the far table: it ends "
+            "the clip on the room floor at x=+3.22, 3.53 m from where it "
+            "started, against the baseline's tidy landing on the far "
+            "table at x=+0.87."
         ),
     ),
     EditCase(
         case_id='edit_slippery_wheels',
         source_case_id=SOURCE_CASE_ID,
         seed=34,
-        dsl='SET car.friction FROM 0.45 TO 0.02',
+        dsl='SET car.friction TIMES 0.3',
         edit_summary=(
-            'Car body/wheel friction dropped to near-zero. On the launch '
-            'deck it coasts almost losslessly, so it reaches the edge with '
-            'far more speed than the source and, after clearing, keeps '
-            'sliding off the far table -- final_x=+2.61, ends the clip on '
-            'the floor beyond it.'
+            "Car friction cut to less than a third. It scrubs almost "
+            "nothing off on the launch deck and reaches the edge far "
+            "faster than the source, so it clears the gap and keeps "
+            "going: it slides straight off the far table and ends the "
+            "clip upright on the room floor at x=+2.78, 3.11 m from where "
+            "it started, against the baseline's tidy landing on the far "
+            "table at x=+0.87."
         ),
     ),
     EditCase(
         case_id='edit_grippy_wheels',
         source_case_id=SOURCE_CASE_ID,
         seed=35,
-        dsl='SET car.friction FROM 0.45 TO 3.0',
+        dsl='SET car.friction TIMES 7',
         edit_summary=(
-            'Car friction cranked up 6.7x. The deck now scrubs so much speed '
-            'off the roll-up that the car barely leaves the stack -- it '
-            'falls off the near edge into the gap instead of arcing across '
-            '(final_x=+0.17, drops 0.71 m).'
+            "Car friction cranked up sevenfold. The deck scrubs so much "
+            "speed off the roll-up that the car cannot clear the gap: it "
+            "drops off the near edge and lands upside down on the room "
+            "floor 0.89 m below, at x=+0.22, where the baseline lands "
+            "upright on the far table at x=+0.87."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same factor as edit_grippy_wheels: they differ by the
+    # AT FRAME clause alone. Landing it after take-off is what makes the
+    # timing readable -- the whole-clip version never lets the car leave the
+    # near table at all.
+    EditCase(
+        case_id='edit_grippy_wheels_mid_jump',
+        source_case_id=SOURCE_CASE_ID,
+        seed=14105,
+        dsl='SET car.friction TIMES 7 AT FRAME 6',
+        edit_summary=(
+            "Wheel friction raised sevenfold at frame 6, with the car already "
+            "off the near table and in the air. Frames 1-5 are the source "
+            "video frame for frame, take-off included, and the flight is "
+            "unchanged -- friction does nothing until something is touched. "
+            "The landing is where it shows: instead of sliding out onto the "
+            "far table and coasting to x=+0.78, the tyres grip the far lip, "
+            "the car trips over it and drops into the gap, ending upside down "
+            "at z=-0.71. The whole-clip version of the same factor is a "
+            "different video again: the car never gets moving and falls "
+            "straight into the gap from the near edge."
         ),
     ),
 )
@@ -159,10 +187,20 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
-def physics_override_to_cli(override: dict[str, Any]) -> list[str]:
-    """Turn a vocab-produced physics_override dict into render CLI flags."""
+def physics_override_to_cli(override: dict[str, Any], case_dir: Path) -> list[str]:
+    """Turn a vocab-produced physics_override dict into render CLI flags.
+
+    An edit that lands partway through the clip is not a parameter value but a
+    schedule, so it is written into the case directory and passed by path --
+    the same file the other scenes carry inside their scenario_overrides.json.
+    """
     flags: list[str] = []
     for key, value in override.items():
+        if key == dsl.TIMED_EDITS_KEY:
+            schedule_path = case_dir / 'timed_edits.json'
+            write_json(schedule_path, value)
+            flags += ['--timed-edits-json', str(schedule_path.resolve())]
+            continue
         if key not in SIM_KEY_TO_CLI_FLAG:
             raise ValueError(
                 f'physics_override key {key!r} has no render CLI flag; '
@@ -240,15 +278,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f'{parsed.property_name} ({parsed.object_id})':
                 {'from': dsl.baseline_value_for(parsed, VOCAB), 'to': parsed.to_value}}
     else:
         diff = {parsed.object_id: {'from': 'present', 'to': 'removed'}}
+    diff['timing'] = dsl.timing_diff(parsed, VOCAB)
     return {
         'edit_dsl': case.dsl,
         'edit_summary': case.edit_summary,
+        'applies_from_frame': dsl.starts_at_frame(parsed),
         'prompts': dsl.make_prompts(parsed, VOCAB),
         'physics_diff': diff,
         'physics_override': physics,
@@ -263,6 +306,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         'source_case_id': case.source_case_id,
         'edit_dsl': edit_info['edit_dsl'],
         'edit_summary': edit_info['edit_summary'],
+        'applies_from_frame': edit_info['applies_from_frame'],
         'physics_diff': edit_info['physics_diff'],
         'prompts': edit_info['prompts'],
     })
@@ -285,6 +329,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -303,6 +358,7 @@ def main() -> None:
             'string.'
         ),
         'baseline_physics': BASELINE_PHYSICS,
+        'total_frames': edit_vocab.TOTAL_FRAMES,
         'resolution': [int(args.resolution[0]), int(args.resolution[1])],
         'fps': int(args.fps),
         'duration_sec': float(args.duration_sec),
@@ -317,11 +373,30 @@ def main() -> None:
     source_record: dict[str, Any] = {
         'case_id': SOURCE_CASE_ID,
         'kind': 'source',
-        'description': (
-            'Source video: baseline parameters. The toy car is pushed at '
-            '1.9 m/s across the book stack, clears the 0.28 m gap and lands '
-            'upright on the far table, coming to rest at final_x ~ +0.78 m.'
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The toy car is pushed across a book stack, clears the "
+                    "gap beyond it, and lands upright on the far table where "
+                    "it comes to rest."
+                ),
+                "zh": (
+                    "玩具车被推过书堆,越过前方的缺口,正面朝上落在对面桌子上并停"
+                    "下。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The toy car is pushed across the book stack, clears the "
+                    "gap, and lands upright on the far table, coming to rest "
+                    "1.07 m from where it set off, at x=+0.87."
+                ),
+                "zh": (
+                    "玩具车被推过书堆,越过缺口,正面朝上落在对面桌子上,相对起点"
+                    "移动 1.07 m,停在 x=+0.87。"
+                ),
+            },
+        },
         'case_dir': str(source_dir.resolve()),
         'status': 'pending',
     }
@@ -355,7 +430,7 @@ def main() -> None:
         write_json(overrides_path, overrides_payload)
         prompts_path = write_prompt_file(case_dir, case, edit_info)
 
-        physics_cli = physics_override_to_cli(edit_info['physics_override'])
+        physics_cli = physics_override_to_cli(edit_info['physics_override'], case_dir)
 
         record: dict[str, Any] = {
             'case_id': case.case_id,
@@ -367,6 +442,7 @@ def main() -> None:
             'prompts_json': str(prompts_path.resolve()),
             'edit_dsl': edit_info['edit_dsl'],
             'edit_summary': edit_info['edit_summary'],
+            'applies_from_frame': edit_info['applies_from_frame'],
             'physics_diff': edit_info['physics_diff'],
             'prompts': edit_info['prompts'],
             'render_cli_flags': physics_cli,

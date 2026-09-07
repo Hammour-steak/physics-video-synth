@@ -74,7 +74,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_rolling_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=11101,
-        dsl="SET rolling_ball.mass FROM 0.057 TO 0.285",
+        dsl="SET rolling_ball.mass TIMES 5",
         edit_summary=(
             "Rolling ball made 5x heavier. The impact now carries much more "
             "momentum into the target: it rockets 1.64 m across the floor "
@@ -86,19 +86,20 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_light_rolling_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=11102,
-        dsl="SET rolling_ball.mass FROM 0.057 TO 0.014",
+        dsl="SET rolling_ball.mass TIMES 0.25",
         edit_summary=(
-            "Rolling ball made 4x lighter (57 g -> 14 g). It still lands on "
-            "top of the target, but bounces mostly straight up off it: the "
-            "target barely moves (0.03 m vs 0.30 m at baseline) and the "
-            "rolling ball comes to rest 0.19 m past the lip instead of 0.74 m."
+            "New tennis ball made four times lighter. It still lands on "
+            "the old one but bounces off it rather than driving it: the "
+            "old ball barely moves, 0.03 m against the baseline's 0.30 m, "
+            "and the light ball comes to rest 0.52 m from its start "
+            "instead of 0.88 m."
         ),
     ),
     EditCase(
         case_id="edit_heavy_target_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=11103,
-        dsl="SET target_ball.mass FROM 0.057 TO 0.285",
+        dsl="SET target_ball.mass TIMES 5",
         edit_summary=(
             "Target ball made 5x heavier. The rolling ball hits a wall of "
             "mass and rebounds backward -- ending up EAST of the lip "
@@ -110,27 +111,29 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
         seed=11104,
-        dsl="SET rolling_ball.initial_velocity FROM 1.28 TO 0.8",
+        dsl="SET rolling_ball.initial_velocity TIMES 0.6",
         edit_summary=(
-            "Rolling ball pushed more gently across the table (1.28 -> 0.8 "
-            "m/s). It reaches the lip at lower speed, is thrown 65 mm less "
-            "far off the edge, and lands short of the target -- no contact "
-            "at all. The target stays untouched at its starting position; "
-            "the rolling ball rolls out west across the floor alone."
+            "New tennis ball pushed more gently across the table. It "
+            "reaches the lip at lower speed, is thrown less far off the "
+            "edge, and lands short of the old ball -- no contact at all. "
+            "The old ball stays exactly where it started, where the "
+            "baseline moves it 0.30 m; the new ball bounces its way out "
+            "across the floor alone, nine hops against the baseline's "
+            "five."
         ),
     ),
     EditCase(
         case_id="edit_dead_rolling_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=11105,
-        dsl="SET rolling_ball.restitution FROM 0.86 TO 0.1",
+        dsl="SET rolling_ball.restitution TIMES 0.1",
         edit_summary=(
-            "Rolling ball's restitution killed (0.86 -> 0.1). Its floor "
-            "bounce and its impact against the target both go inelastic: "
-            "instead of transferring cleanly, the pair sticks and the "
-            "rolling ball drives on behind the target. Target moves only "
-            "0.12 m (vs 0.30 m at baseline); the rolling ball ends 0.97 m "
-            "past the lip instead of 0.74 m."
+            "New tennis ball's restitution killed. Its floor bounce and "
+            "its impact against the old ball both go inelastic: it stops "
+            "bouncing entirely -- no hops against the baseline's five -- "
+            "and the pair sticks rather than transferring cleanly. The "
+            "old ball moves only 0.12 m instead of 0.30 m, while the new "
+            "one drives on to 1.09 m from its start against 0.88 m."
         ),
     ),
     EditCase(
@@ -143,6 +146,28 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "lands on the rug exactly where the baseline predicts -- "
             "(-0.67, -0.29) -- and, with nothing to strike, rolls on "
             "unobstructed for 1.18 m before friction stops it."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_target_ball: they differ by
+    # the AT FRAME clause alone. Taking the target away after it has been
+    # struck is what makes the timing readable -- removing it beforehand
+    # leaves the rolling ball nothing to hit when it lands.
+    EditCase(
+        case_id="edit_remove_target_ball_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=7107,
+        dsl="DELETE target_ball AT FRAME 30",
+        edit_summary=(
+            "Target ball removed at frame 30, eight frames after the rolling "
+            "ball lands off the table and strikes it at frame 22. Frames 1-29 "
+            "are the source video frame for frame, impact included: the "
+            "rolling ball is knocked back from 3.2 m/s to 0.8, and the target "
+            "has been driven from x=-0.73 to -0.98 when it disappears. The "
+            "rolling ball then settles at x=-0.42 exactly as in the source. "
+            "The whole-clip version of the same delete is a different video "
+            "again: with nothing on the floor to hit, it lands and runs on to "
+            "x=-0.86."
         ),
     ),
 )
@@ -264,15 +289,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -287,6 +317,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -309,6 +340,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -328,6 +370,7 @@ def main() -> None:
             "string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -342,13 +385,33 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. A new (bright yellow) tennis "
-            "ball is pushed at 1.28 m/s along the table, leaves the west lip "
-            "at 1.05 m/s, lands at (-0.67, -0.29) on the rug, and hits an "
-            "old (dulled) tennis ball waiting in line. The old ball is "
-            "driven 0.30 m west; the new ball is kicked 0.74 m east."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The new tennis ball is pushed along the table, runs off "
+                    "the lip and drops to the rug, landing on the old tennis "
+                    "ball waiting there and driving it along the floor."
+                ),
+                "zh": (
+                    "新网球被推过桌面,滚出桌沿掉到地毯上,砸在等在那里的旧网球上"
+                    "并把它推走一段。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The new tennis ball is pushed at 1.28 m/s along the "
+                    "table, runs off the lip, drops to the rug and lands on "
+                    "the old tennis ball waiting there. The old tennis ball "
+                    "is driven 0.30 m along the floor; the new one ends 0.88 "
+                    "m from where it started."
+                ),
+                "zh": (
+                    "新网球以 1.28 m/s 被推过桌面,滚出桌沿掉到地毯上,"
+                    "砸在等在那里的旧网球上。旧网球被推出 0.30 m;新网球相"
+                    "对起点移动 0.88 m。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -397,6 +460,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

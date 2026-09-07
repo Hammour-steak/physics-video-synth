@@ -369,6 +369,20 @@ def create_scenario(args: argparse.Namespace) -> dict[str, object]:
                 "ice_friction": 0.015,
                 "launch_speed": 1.5,
                 "start_separation": 5.0,
+                # Explicit start centres. Derived from start_separation, and
+                # passed to the sim so the PCVE edit vocabulary has a physics
+                # key to read each stone's position out of rather than having
+                # to re-derive the geometry itself.
+                "stone_1_initial_location": [-2.5, 0.0, 0.057],
+                "stone_2_initial_location": [2.5, 0.0, 0.057],
+                # The blue stone: not on the ice at baseline. A PCVE ADD edit
+                # turns slot 2 of `stone_active` on and overwrites this centre.
+                "stone_3_mass": 20.0,
+                "stone_3_initial_location": [0.0, 0.0, 0.057],
+                # Three-slot presence list (red, yellow, blue). Only the blue
+                # slot reads 0 at baseline, which is what makes ADD its mirror
+                # of DELETE.
+                "stone_active": [1, 1, 0],
                 "gravity": [0.0, 0.0, -9.8],
             },
             "jitter": {
@@ -400,6 +414,18 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
 
     script_path = Path(__file__).with_name("simulate_curling_collision.py")
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
+
+    # Scenarios written before the blue stone existed carry neither the
+    # explicit centres nor the presence list; fall back to the separation-
+    # derived layout so those still replay unchanged.
+    sep = float(physics["start_separation"])
+    half_h = float(physics["stone_height"]) / 2.0
+    loc_1 = physics.get("stone_1_initial_location", [-sep / 2.0, 0.0, half_h])
+    loc_2 = physics.get("stone_2_initial_location", [sep / 2.0, 0.0, half_h])
+    loc_3 = physics.get("stone_3_initial_location", [0.0, 0.0, half_h])
+    active = list(physics.get("stone_active", [1, 1, 0]))
+    while len(active) < 3:
+        active.append(0)
     subprocess.run(
         [
             python,
@@ -432,6 +458,14 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             str(float(physics.get("stone_2_launch_speed", physics["launch_speed"]))),
             "--start-separation",
             str(float(physics["start_separation"])),
+            "--stone-1-x", str(float(loc_1[0])),
+            "--stone-1-y", str(float(loc_1[1])),
+            "--stone-2-x", str(float(loc_2[0])),
+            "--stone-2-y", str(float(loc_2[1])),
+            "--stone-3-x", str(float(loc_3[0])),
+            "--stone-3-y", str(float(loc_3[1])),
+            "--stone-3-mass", str(float(physics.get("stone_3_mass", physics["stone_mass"]))),
+            "--stone-3-active", str(int(active[2])),
             "--gravity-z",
             str(float(physics["gravity"][2])),
         ],
@@ -451,18 +485,21 @@ def set_linear_keyframes(objects) -> None:
 
 
 def apply_physics_animation(stones: list[bpy.types.Object], physics: dict) -> None:
-    for obj in stones:
+    # A hidden stone -- the blue one, when no ADD edit placed it -- needs no
+    # keyframes: build_scene already parked it at its frozen position.
+    animated = [(idx, obj) for idx, obj in enumerate(stones) if not obj.hide_render]
+    for _idx, obj in animated:
         obj.rotation_mode = "QUATERNION"
     for frame_record in physics["frames"]:
         frame = int(frame_record["frame_index"])
-        for idx, stone_obj in enumerate(stones):
+        for idx, stone_obj in animated:
             stone_data = frame_record["stones"][idx]
             quat = stone_data["quaternion_xyzw"]
             stone_obj.location = stone_data["location"]
             stone_obj.rotation_quaternion = (quat[3], quat[0], quat[1], quat[2])
             stone_obj.keyframe_insert(data_path="location", frame=frame)
             stone_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
-    set_linear_keyframes(stones)
+    set_linear_keyframes([obj for _idx, obj in animated])
 
 
 def export_ground_truth(
@@ -484,7 +521,11 @@ def export_ground_truth(
         "physics": {key: value for key, value in physics.items() if key != "frames"},
         "objects": {
             "stones": [
-                {"object_name": stone.name, "index": idx}
+                {
+                    "object_name": stone.name,
+                    "index": idx,
+                    "present": not bool(stone.hide_render),
+                }
                 for idx, stone in enumerate(stones)
             ],
         },
@@ -513,6 +554,7 @@ def export_ground_truth(
                 "time_sec": (frame - 1) / float(fps),
                 "stones": [
                     {
+                        "present": not bool(stone.hide_render),
                         "matrix_world": [[float(v) for v in row] for row in stone.matrix_world],
                         "location": [float(v) for v in stone.location],
                         "linear_velocity": stone_data["linear_velocity"],
@@ -632,19 +674,43 @@ def build_scene(args: argparse.Namespace, scenario: dict[str, object]) -> tuple[
     assert isinstance(physics, dict)
     height = float(physics["stone_height"])
     separation = float(physics["start_separation"])
+    seat_z = FLOOR_Z + height / 2.0
+
+    loc_0 = physics.get("stone_1_initial_location", [-separation / 2.0, 0.0, seat_z])
+    loc_1 = physics.get("stone_2_initial_location", [separation / 2.0, 0.0, seat_z])
+    loc_2 = physics.get("stone_3_initial_location", [0.0, 0.0, seat_z])
+    active = list(physics.get("stone_active", [1, 1, 0]))
+    while len(active) < 3:
+        active.append(0)
 
     master = import_curling_stone_master()
-    copy_obj = master.copy()
-    bpy.context.scene.collection.objects.link(copy_obj)
+    copies = []
+    for _ in range(2):
+        copy_obj = master.copy()
+        bpy.context.scene.collection.objects.link(copy_obj)
+        copies.append(copy_obj)
 
     stone_0 = place_curling_stone(
-        "stone_0", (-separation / 2.0, 0.0, FLOOR_Z + height / 2.0), master,
+        "stone_0", (float(loc_0[0]), float(loc_0[1]), seat_z), master,
     )
     stone_1 = place_curling_stone(
-        "stone_1", (separation / 2.0, 0.0, FLOOR_Z + height / 2.0), copy_obj,
+        "stone_1", (float(loc_1[0]), float(loc_1[1]), seat_z), copies[0],
     )
-    recolor_stone_handle(stone_1, hue=0.667)  # shift red -> yellow/gold
-    stones = [stone_0, stone_1]
+    stone_2 = place_curling_stone(
+        "stone_2", (float(loc_2[0]), float(loc_2[1]), seat_z), copies[1],
+    )
+    # Blender's hue node reads 0.5 as no change over the full 0-1 range, so
+    # 0.667 rotates the scanned red handle +60 degrees to gold and 0.167
+    # rotates it -120 degrees to blue. Three teams, one scanned asset.
+    recolor_stone_handle(stone_1, hue=0.667)  # red -> yellow/gold
+    recolor_stone_handle(stone_2, hue=0.167)  # red -> blue
+    stones = [stone_0, stone_1, stone_2]
+
+    # The blue stone is only on the ice when an ADD edit put it there.
+    for stone, slot in zip(stones, active):
+        if not int(slot):
+            stone.hide_viewport = True
+            stone.hide_render = True
 
     frame_end = max(2, int(round(float(args.duration_sec) * int(args.fps))))
     scene.frame_start = 1

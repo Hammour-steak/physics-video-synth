@@ -62,50 +62,76 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_underpowered',
         source_case_id=SOURCE_CASE_ID,
         seed=13101,
-        dsl='SET car.initial_velocity FROM 2.7 TO 1.5',
+        dsl='SET car.initial_velocity TIMES 0.6',
         edit_summary=(
-            'Push weakened well below the crest threshold. The car climbs '
-            'only ~0.29 m up the ramp, stalls, and slides back down under '
-            'gravity, coming to rest near the base at final_x=+0.91 (baseline '
-            'clears the ramp and lands past it at -0.64).'
+            "Push weakened well below the crest threshold. The car climbs "
+            "part of the ramp, stalls, and slides back down under "
+            "gravity, coming to rest on the floor behind where it set off "
+            "-- x=+0.97 against a start of x=+0.32. The baseline clears "
+            "the ramp and lands past it at x=-0.73."
         ),
     ),
     EditCase(
         case_id='edit_underrotate_flip',
         source_case_id=SOURCE_CASE_ID,
         seed=13102,
-        dsl='SET car.initial_velocity FROM 2.7 TO 2.5',
+        dsl='SET car.initial_velocity TIMES 0.95',
         edit_summary=(
-            'Push dropped from 2.7 to 2.5 m/s -- across the flip threshold. '
-            'The car still clears the ramp top, but has just enough less '
-            "airtime that it under-rotates and lands on its roof (up=-1.0) "
-            'instead of bottom-down. Landing spot is almost identical '
-            '(final_x=-0.57 vs -0.64); only the orientation flips.'
+            "Push dropped from 2.7 to 2.565 m/s, just across the flip "
+            "threshold. The car still clears the ramp and lands past it "
+            "-- 1.09 m from its start at x=-0.77, against the baseline's "
+            "1.05 m to x=-0.73 -- but it has enough less airtime that it "
+            "under-rotates and comes down on its roof rather than "
+            "bottom-down. The landing spot barely moves; only the "
+            "orientation flips."
         ),
     ),
     EditCase(
         case_id='edit_grippy_wheels',
         source_case_id=SOURCE_CASE_ID,
         seed=13103,
-        dsl='SET car.friction FROM 0.25 TO 0.9',
+        dsl='SET car.friction TIMES 4',
         edit_summary=(
-            'Pair friction between car and ramp cranked up 3.6x -- what a '
-            'grip-tape ramp surface would give. The wheels bite so hard that '
-            'the car only climbs ~0.34 m and stops on the ramp face rather '
-            'than launching off the top; final_x=-0.01, sitting mid-ramp.'
+            "Pair friction between car and ramp raised fourfold -- what a "
+            "grip-tape surface would give. The wheels bite so hard that "
+            "the car advances only 0.29 m and stops part-way up the ramp "
+            "at x=+0.05, still tilted on the face, instead of launching "
+            "off the top and landing past it at x=-0.73."
         ),
     ),
     EditCase(
         case_id='edit_slick_wheels',
         source_case_id=SOURCE_CASE_ID,
         seed=13104,
-        dsl='SET car.friction FROM 0.25 TO 0.05',
+        dsl='SET car.friction TIMES 0.2',
         edit_summary=(
             'Pair friction dropped 5x -- effectively an ice-slick ramp. The '
             'car loses almost no speed on the way up, launches off the top '
             'with a lot to spare, and coasts far past the ramp: climb=2.37 '
             'm (baseline 0.96 m), final_x=-2.05, and it is still drifting at '
             '0.13 m/s when the clip ends.'
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip. The
+    # whole-clip version of a grip this strong never lets the car leave the
+    # floor; landing it mid-climb instead is what makes the timing readable --
+    # the run-up and the first half of the climb are the source video's, and
+    # the car then stops on the face of the ramp.
+    EditCase(
+        case_id='edit_grippy_wheels_mid_climb',
+        source_case_id=SOURCE_CASE_ID,
+        seed=13105,
+        dsl='SET car.friction TIMES 8 AT FRAME 8',
+        edit_summary=(
+            "Pair friction between car and ramp raised eightfold at frame 8, "
+            "with the car already a third of the way up. Frames 1-7 are the "
+            "source video frame for frame. From there the grip stops it dead "
+            "on the ramp face at x=-0.40, z=0.37, where it sits for the rest "
+            "of the clip -- it climbs 0.77 m of the baseline's 0.96 m and "
+            "never reaches the top or lands beyond it at x=-0.73. The "
+            "whole-clip version of the same factor is a different video "
+            "again: the car cannot even start the climb and stops at the foot "
+            "of the ramp at x=+0.26, having moved 0.07 m."
         ),
     ),
 )
@@ -223,15 +249,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f'{parsed.property_name} ({parsed.object_id})':
                 {'from': dsl.baseline_value_for(parsed, VOCAB), 'to': parsed.to_value}}
     else:
         diff = {parsed.object_id: {'from': 'present', 'to': 'removed'}}
+    diff['timing'] = dsl.timing_diff(parsed, VOCAB)
     return {
         'edit_dsl': case.dsl,
         'edit_summary': case.edit_summary,
+        'applies_from_frame': dsl.starts_at_frame(parsed),
         'prompts': dsl.make_prompts(parsed, VOCAB),
         'physics_diff': diff,
         'physics_override': physics,
@@ -246,6 +277,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         'source_case_id': case.source_case_id,
         'edit_dsl': edit_info['edit_dsl'],
         'edit_summary': edit_info['edit_summary'],
+        'applies_from_frame': edit_info['applies_from_frame'],
         'physics_diff': edit_info['physics_diff'],
         'prompts': edit_info['prompts'],
     })
@@ -268,6 +300,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -286,6 +329,7 @@ def main() -> None:
             'string.'
         ),
         'baseline_physics': BASELINE_PHYSICS,
+        'total_frames': edit_vocab.TOTAL_FRAMES,
         'resolution': [int(args.resolution[0]), int(args.resolution[1])],
         'fps': int(args.fps),
         'duration_sec': float(args.duration_sec),
@@ -300,12 +344,30 @@ def main() -> None:
     source_record: dict[str, Any] = {
         'case_id': SOURCE_CASE_ID,
         'kind': 'source',
-        'description': (
-            'Source video: baseline parameters. Toy car pushed at 2.7 m/s up '
-            'the 20 deg slick-asphalt ramp; clears the top, completes its '
-            'rotation in the air, and lands upright at final_x=-0.64 m just '
-            'past the ramp.'
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The toy car is pushed up a ramp, clears the top, turns "
+                    "over in the air and lands upright just past it."
+                ),
+                "zh": (
+                    "玩具车冲上斜坡,越过坡顶,在空中翻转一圈后正面朝上落在坡后。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The toy car is pushed at 2.7 m/s up the 20 deg "
+                    "slick-asphalt ramp, clears the top, completes its "
+                    "rotation in the air, and lands upright just past the "
+                    "ramp, ending at x=-0.73 after 1.05 m of travel."
+                ),
+                "zh": (
+                    "玩具车以 2.7 m/s 冲上 20 度的光滑沥青坡,越过坡"
+                    "顶,在空中转完一圈后正面朝上落在坡后,行程 1.05 m,停"
+                    "在 x=-0.73。"
+                ),
+            },
+        },
         'case_dir': str(source_dir.resolve()),
         'status': 'pending',
     }
@@ -349,6 +411,7 @@ def main() -> None:
             'prompts_json': str(prompts_path.resolve()),
             'edit_dsl': edit_info['edit_dsl'],
             'edit_summary': edit_info['edit_summary'],
+            'applies_from_frame': edit_info['applies_from_frame'],
             'physics_diff': edit_info['physics_diff'],
             'prompts': edit_info['prompts'],
             'status': 'pending',

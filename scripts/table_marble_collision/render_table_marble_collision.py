@@ -38,6 +38,7 @@ PROPS_COLLIDER_OBJ = COLLISION_DIR / "modern_living_room_table_dressing.obj"
 OUTPUT_STEM = "table_marble_collision"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
@@ -628,10 +629,23 @@ def export_collider(path: Path, object_names) -> Path:
 
 # --- Physics ------------------------------------------------------------------
 
+def removal_frame(frames: list, key: str) -> int | None:
+    """The first frame ``key`` is missing from, if it starts out present.
+
+    A ball the simulator removed mid-run simply stops appearing in the record
+    -- the same shape a whole-clip delete produces, only starting later.
+    """
+    if not frames or key not in frames[0]:
+        return None
+    return next((int(f["frame_index"]) for f in frames if key not in f), None)
+
+
 def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
     obj.rotation_mode = "QUATERNION"
     for fr in frames:
-        d = fr[key]
+        d = fr.get(key)
+        if d is None:
+            continue
         obj.location = d["location"]
         q = d["quaternion_xyzw"]
         obj.rotation_quaternion = (q[3], q[0], q[1], q[2])
@@ -641,6 +655,20 @@ def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
         for fc in obj.animation_data.action.fcurves:
             for k in fc.keyframe_points:
                 k.interpolation = "LINEAR"
+    # A marble a timed edit takes away mid-roll leaves the picture at the frame
+    # the simulation stopped reporting it. CONSTANT interpolation so it
+    # vanishes between two frames rather than fading across them.
+    gone_at = removal_frame(frames, key)
+    if gone_at is not None and gone_at > 1:
+        for path in ("hide_viewport", "hide_render"):
+            setattr(obj, path, False)
+            obj.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(obj, path, True)
+            obj.keyframe_insert(data_path=path, frame=gone_at)
+        for fc in obj.animation_data.action.fcurves:
+            if fc.data_path in ("hide_viewport", "hide_render"):
+                for k in fc.keyframe_points:
+                    k.interpolation = "CONSTANT"
 
 
 def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
@@ -653,6 +681,14 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
 
     ph = scenario["physics"]
     out = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = ph.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     command = [
         python, str(Path(__file__).with_name("simulate_table_marble_collision.py")),
         "--out", str(out),
@@ -692,9 +728,12 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     active = ph.get("active", [1, 1])
     command += ["--ball-b-active", str(int(active[1]))]
 
+    if timed_edits:
+        command += ["--timed-edits-json", str(timed_edits_path)]
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
 
     q, c = data["quality"], data["collision"]
     if not q["hit_ball_b"]:
@@ -893,6 +932,9 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                        "radius": physics["objects"]["ball_a"]["radius"],
                        "mass": physics["objects"]["ball_a"]["mass"]},
             "ball_b": {"present": bool(physics["objects"]["ball_b"].get("present", True)),
+                       # The frame it stops being on screen, for a marble a
+                       # timed edit takes away partway through.
+                       "removed_at_frame": removal_frame(physics["frames"], "ball_b"),
                        "object_name": ball_b.name,
                        "radius": physics["objects"]["ball_b"]["radius"],
                        "mass": physics["objects"]["ball_b"]["mass"]},
@@ -922,8 +964,11 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps),
                  "camera_matrix_world": [[float(v) for v in row]
                                          for row in camera.matrix_world]}
+        # Presence is per frame now: a timed delete leaves the ball in the
+        # record up to its frame and out of it afterwards.
+        b_here = ball_b_present and "ball_b" in pf
         pairs = [("ball_a", ball_a)]
-        if ball_b_present:
+        if b_here:
             pairs.append(("ball_b", ball_b))
         for key, obj in pairs:
             entry[key] = {
@@ -934,10 +979,11 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                 "spin_z": pf[key]["spin_z"],
                 "on_table": pf[key]["on_table"],
             }
-        if not ball_b_present:
+        if not b_here:
             entry["ball_b"] = {"present": False}
         entry["ball_a"]["phase"] = pf["ball_a"]["phase"]
-        if ball_b_present:
+        if b_here:
+            entry["ball_b"]["present"] = True
             entry["ball_b"]["moving"] = pf["ball_b"]["moving"]
         records["frames"].append(entry)
     (out_dir / GROUND_TRUTH_NAME).write_text(json.dumps(records, indent=2), encoding="utf-8")

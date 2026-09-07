@@ -58,7 +58,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_can",
         source_case_id=SOURCE_CASE_ID,
         seed=5101,
-        dsl="SET can.mass FROM 0.36 TO 1.44",
+        dsl="SET can.mass TIMES 4",
         edit_summary=(
             "The pushed can made 4x heavier. It carries so much more momentum "
             "through both handoffs that the whole chain runs about twice as "
@@ -71,7 +71,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_cup",
         source_case_id=SOURCE_CASE_ID,
         seed=5102,
-        dsl="SET cup.mass FROM 0.30 TO 1.5",
+        dsl="SET cup.mass TIMES 5",
         edit_summary=(
             "Middle cup made 5x heavier. The can hits it and rebounds instead "
             "of driving on: the can only slides 0.58 m (down from 1.31 m) and "
@@ -84,7 +84,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_milk",
         source_case_id=SOURCE_CASE_ID,
         seed=5103,
-        dsl="SET milk.mass FROM 0.35 TO 1.75",
+        dsl="SET milk.mass TIMES 5",
         edit_summary=(
             "Last-link carton made 5x heavier. The first handoff is basically "
             "intact -- can 0.92 m, cup 0.51 m -- and the cup does reach the "
@@ -97,24 +97,25 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
         seed=5104,
-        dsl="SET can.initial_velocity FROM 3.3 TO 1.5",
+        dsl="SET can.initial_velocity TIMES 0.5",
         edit_summary=(
-            "Push cut to less than half (3.3 -> 1.5 m/s). The can still reaches "
-            "the cup and shoves it, but the cup only slides 0.24 m -- 26 cm "
-            "short of the milk -- so the chain dies one link early for lack of "
-            "speed rather than for a physics change downstream. The carton "
-            "never moves."
+            "Push cut in half. The can still reaches the cup and shoves "
+            "it, but the cup only slides 0.31 m -- 0.19 m short of the "
+            "milk -- so the chain dies one link early for lack of speed "
+            "rather than for any change downstream. The carton never "
+            "moves, where the baseline carries it 0.48 m."
         ),
     ),
     EditCase(
         case_id="edit_gentle_push",
         source_case_id=SOURCE_CASE_ID,
         seed=5105,
-        dsl="SET can.initial_velocity FROM 3.3 TO 0.8",
+        dsl="SET can.initial_velocity TIMES 0.25",
         edit_summary=(
-            "Too gentle a push (0.8 m/s). The can only slides 0.35 m -- well "
-            "short of the cup at 0.50 m -- so no collision happens at all. "
-            "The cup and the milk carton both stay exactly where they started."
+            "Too gentle a push. The can slides only 0.37 m, short of the "
+            "0.50 m to the cup, so no collision happens at all. The cup "
+            "and the milk carton both stay exactly where they started, "
+            "against the baseline's 0.91 m and 0.48 m."
         ),
     ),
     EditCase(
@@ -139,6 +140,29 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "1.80 m, cup 1.58 m -- but the cup then coasts through the empty "
             "slot at the end of the chain instead of stopping on the carton, "
             "and ends much further along the table than in the baseline."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_cup: they differ by the AT
+    # FRAME clause alone, and the two videos are nothing alike. Taking the cup
+    # away after the can has already run into it is what makes the timing
+    # readable -- the can has spent most of its speed by then.
+    EditCase(
+        case_id="edit_remove_cup_mid_slide",
+        source_case_id=SOURCE_CASE_ID,
+        seed=6108,
+        dsl="DELETE cup AT FRAME 10",
+        edit_summary=(
+            "Cup removed at frame 10, five frames after the can runs into it "
+            "and one before it would have reached the milk. Frames 1-9 are "
+            "the source video frame for frame, first impact included: the can "
+            "is down from 3.3 m/s to about 1.4, and the cup is 0.4 m along "
+            "when it disappears. The can then reaches the milk itself, but "
+            "with what little speed it has left -- the milk is nudged to "
+            "y=+0.03 instead of the source's +0.28. The whole-clip version of "
+            "the same delete is a different video again: with no cup to hit, "
+            "the can arrives at the milk at full speed and drives it out to "
+            "y=+1.19."
         ),
     ),
 )
@@ -256,15 +280,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -279,6 +308,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -301,6 +331,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -318,6 +359,7 @@ def main() -> None:
             "from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -332,12 +374,33 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. The cola can is pushed at 3.3 m/s "
-            "and strikes the soda cup 50 cm downstream, which in turn strikes "
-            "the milk carton another 50 cm on. All three slide before coming "
-            "to rest -- can 1.31 m, cup 0.91 m, milk 0.48 m."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The cola can is pushed along the table into the soda "
+                    "cup, which is shoved on into the milk carton. All three "
+                    "slide before coming to rest."
+                ),
+                "zh": (
+                    "可乐罐沿桌面被推出,撞上汽水杯,汽水杯又撞上牛奶盒。三者依次"
+                    "滑行后停下。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The cola can is pushed at 3.3 m/s and strikes the soda "
+                    "cup 0.50 m downstream, which in turn strikes the milk "
+                    "carton another 0.50 m on. All three slide before coming "
+                    "to rest -- can 1.31 m, cup 0.91 m, carton 0.48 m."
+                ),
+                "zh": (
+                    "可乐罐以 3.3 m/s 被推出,撞上 0.50 m 外的汽"
+                    "水杯,汽水杯又撞上再往前 0.50 m 的牛奶盒。三者依次滑"
+                    "行后停下 —— 可乐罐 1.31 m、汽水杯 0.91 m、"
+                    "牛奶盒 0.48 m。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -381,6 +444,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

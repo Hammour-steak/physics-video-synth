@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import pybullet as p
+
+# The shared timed-edit plumbing lives one directory up, next to the DSL.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pcve_timed_edits as timed  # noqa: E402
 
 
 # A toy ball is rolled across a living room's bare floor onto a square area rug
@@ -139,7 +144,30 @@ def parse_args() -> argparse.Namespace:
         help="Initial speed along +Y in m/s (a firm hand roll).",
     )
     parser.add_argument("--gravity-z", type=float, default=-9.8)
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def apply_timed_params(client: int, params: dict, *, bodies: dict) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    ``bodies`` is the ball. Anything this scene's edit vocabulary cannot
+    produce raises: an edit that is silently dropped renders as a video that
+    looks like the baseline and nothing downstream would catch it.
+    """
+    fields = {"ball_mass": ("ball", "mass"),
+              "ball_friction": ("ball", "lateralFriction"),
+              "ball_rolling_friction": ("ball", "rollingFriction"),
+              "ball_restitution": ("ball", "restitution")}
+    for key, value in params.items():
+        if key not in fields:
+            raise timed.unknown_param(key)
+        name, field = fields[key]
+        timed.set_one(p, client, bodies[name], field, value)
 
 
 def add_static_box(client: int, half_extents, position, friction: float,
@@ -279,10 +307,18 @@ def simulate(args: argparse.Namespace) -> dict:
         leg_contact_frame = None
         settle_frame = None
 
+        timed_edits = timed.load_timed_edits(args.timed_edits_json)
+        timed.check_horizon(timed_edits, frame_end)
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
+
+            # The edit lands at the top of its frame: this frame is the
+            # first one that shows it, and every frame before it is the
+            # source video.
+            if frame_index in timed_edits:
+                apply_timed_params(client, timed_edits[frame_index], bodies=dict(ball=ball_id))
 
             pos, quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
             lin, ang = p.getBaseVelocity(ball_id, physicsClientId=client)
@@ -376,6 +412,10 @@ def simulate(args: argparse.Namespace) -> dict:
                     "top_z": TABLE_LEG_TOP,
                 },
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "reached_carpet": on_carpet_frame is not None,
                 "carpet_entry_frame": on_carpet_frame,

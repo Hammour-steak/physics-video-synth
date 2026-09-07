@@ -24,6 +24,7 @@ DIRECT_MP4_NAME = f"{OUTPUT_STEM}.mp4"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
 # Geometry taken from assets/models/domino_test.glb: a single upright tile
@@ -289,6 +290,15 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
 
     script_path = Path(__file__).with_name("simulate_domino_chain.py")
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
+    # An edit that lands partway through the clip reaches the simulator as a
+    # schedule file rather than as flags: the run uses the ordinary parameters
+    # up to its frame, which is what makes every frame before it the source
+    # video's own physics.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     subprocess.run(
         [
             python,
@@ -331,11 +341,13 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             "--domino-frictions-list", *[str(float(v)) for v in physics["domino_frictions"]],
             "--domino-restitutions-list", *[str(float(v)) for v in physics["domino_restitutions"]],
             "--domino-active", *[str(int(v)) for v in physics["domino_active"]],
-        ],
+        ]
+        + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
         check=True,
     )
     records = json.loads(physics_path.read_text(encoding="utf-8"))
     physics_path.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return records
 
 
@@ -371,6 +383,52 @@ def apply_physics_animation(dominoes: list, physics: dict) -> None:
             domino_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
     set_linear_keyframes([o for o in dominoes if o is not None])
+    apply_disappearances(dominoes, physics)
+
+
+def removal_frame(physics: dict, index: int) -> int | None:
+    """The first frame tile ``index`` is absent on, if it starts out present.
+
+    A tile a timed edit takes away stops being reported as present partway
+    through; one a whole-clip delete removed was never present at all, and has
+    no removal frame to name.
+    """
+    frames = physics["frames"]
+    if not frames or not frames[0]["dominoes"][index]["present"]:
+        return None
+    return next(
+        (
+            int(frame_record["frame_index"])
+            for frame_record in frames
+            if not frame_record["dominoes"][index]["present"]
+        ),
+        None,
+    )
+
+
+def apply_disappearances(dominoes: list, physics: dict) -> None:
+    """Make a tile the simulation removed mid-run leave the picture.
+
+    A whole-clip delete never builds the tile at all; this is the other kind,
+    where it stands or topples through the frames it has in the source and
+    then is gone. The keyframes are CONSTANT so it vanishes between two frames
+    rather than fading across them.
+    """
+    for index, domino_obj in enumerate(dominoes):
+        if domino_obj is None:
+            continue
+        gone_at = removal_frame(physics, index)
+        if gone_at is None or gone_at <= 1:
+            continue
+        for data_path in ("hide_viewport", "hide_render"):
+            setattr(domino_obj, data_path, False)
+            domino_obj.keyframe_insert(data_path=data_path, frame=gone_at - 1)
+            setattr(domino_obj, data_path, True)
+            domino_obj.keyframe_insert(data_path=data_path, frame=gone_at)
+        for fcurve in domino_obj.animation_data.action.fcurves:
+            if fcurve.data_path in ("hide_viewport", "hide_render"):
+                for key in fcurve.keyframe_points:
+                    key.interpolation = "CONSTANT"
 
 
 def export_ground_truth(
@@ -395,7 +453,11 @@ def export_ground_truth(
                 (
                     {"present": False, "object_name": None, "index": idx}
                     if domino is None
-                    else {"present": True, "object_name": domino.name, "index": idx}
+                    else {"present": True, "object_name": domino.name, "index": idx,
+                          # The frame the tile stops being on screen, for one a
+                          # timed edit takes away partway through; None when it
+                          # is in the picture for the whole clip.
+                          "removed_at_frame": removal_frame(physics, idx)}
                 )
                 for idx, domino in enumerate(dominoes)
             ],
@@ -427,8 +489,11 @@ def export_ground_truth(
                 "time_sec": (frame - 1) / float(fps),
                 "dominoes": [
                     (
+                        # Absent either because the edit removed the tile
+                        # before the clip started, or because a timed edit
+                        # removed it at this frame.
                         {"present": False}
-                        if domino is None
+                        if domino is None or not domino_data["present"]
                         else {
                             "present": True,
                             "matrix_world": [[float(v) for v in row] for row in domino.matrix_world],

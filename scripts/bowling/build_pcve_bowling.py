@@ -62,19 +62,21 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_light_ball',
         source_case_id=SOURCE_CASE_ID,
         seed=5101,
-        dsl='SET ball.mass FROM 3.0 TO 0.5',
+        dsl='SET ball.mass TIMES 0.2',
         edit_summary=(
-            'Ball made 6x lighter. It rebounds off the head pin almost like a '
-            'billiard cue-off: only a couple of pins wobble, total pin '
-            'displacement drops to ~1.4 m (baseline ~5.6 m), and the ball '
-            'itself stalls right at the pin line instead of coasting past it.'
+            "Ball made five times lighter. It no longer ploughs through "
+            "the rack: the pins take 2.02 m of travel between them "
+            "against the baseline's 6.67 m, and the head pin in "
+            "particular moves 0.55 m instead of 4.08 m. The ball itself "
+            "stops at the pin line after 10.00 m, where the baseline "
+            "carries 14.35 m and is still running at 1.59 m/s at the end."
         ),
     ),
     EditCase(
         case_id='edit_heavy_pins',
         source_case_id=SOURCE_CASE_ID,
         seed=5102,
-        dsl='SET pins.mass FROM 0.8 TO 20.0',
+        dsl='SET pins.mass TIMES 25',
         edit_summary=(
             'Pins made 25x heavier -- effectively immovable. No pins are '
             'knocked; the ball bounces straight back off the front pin and '
@@ -85,7 +87,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_grippy_ball',
         source_case_id=SOURCE_CASE_ID,
         seed=5103,
-        dsl='SET ball.friction FROM 0.4 TO 2.0',
+        dsl='SET ball.friction TIMES 5',
         edit_summary=(
             "Ball made 5x grippier. Lane friction eats it during the roll: it "
             'reaches the pins with far less speed, only nudges the front pin, '
@@ -96,7 +98,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_slippery_pins',
         source_case_id=SOURCE_CASE_ID,
         seed=5104,
-        dsl='SET pins.friction FROM 0.4 TO 0.05',
+        dsl='SET pins.friction TIMES 0.125',
         edit_summary=(
             'Pin/lane friction dropped to near-zero. Knocked pins skate '
             'across the lane instead of tumbling to a stop: total pin '
@@ -219,15 +221,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f'{parsed.property_name} ({parsed.object_id})':
                 {'from': dsl.baseline_value_for(parsed, VOCAB), 'to': parsed.to_value}}
     else:
         diff = {parsed.object_id: {'from': 'present', 'to': 'removed'}}
+    diff['timing'] = dsl.timing_diff(parsed, VOCAB)
     return {
         'edit_dsl': case.dsl,
         'edit_summary': case.edit_summary,
+        'applies_from_frame': dsl.starts_at_frame(parsed),
         'prompts': dsl.make_prompts(parsed, VOCAB),
         'physics_diff': diff,
         'physics_override': physics,
@@ -242,6 +249,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         'source_case_id': case.source_case_id,
         'edit_dsl': edit_info['edit_dsl'],
         'edit_summary': edit_info['edit_summary'],
+        'applies_from_frame': edit_info['applies_from_frame'],
         'physics_diff': edit_info['physics_diff'],
         'prompts': edit_info['prompts'],
     })
@@ -264,6 +272,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -281,6 +300,7 @@ def main() -> None:
             'physics diff are all derived from that one string.'
         ),
         'baseline_physics': BASELINE_PHYSICS,
+        'total_frames': edit_vocab.TOTAL_FRAMES,
         'resolution': [int(args.resolution[0]), int(args.resolution[1])],
         'fps': int(args.fps),
         'duration_sec': float(args.duration_sec),
@@ -295,12 +315,33 @@ def main() -> None:
     source_record: dict[str, Any] = {
         'case_id': SOURCE_CASE_ID,
         'kind': 'source',
-        'description': (
-            'Source video: baseline parameters. A 3 kg bowling ball is rolled '
-            'at 8 m/s down the lane at the standard 10-pin triangle; the '
-            'ball plows through the front of the formation and pins scatter, '
-            'total pin displacement ~5.6 m.'
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The bowling ball is rolled down the lane into the "
+                    "bowling pin set, ploughs through the front of the "
+                    "formation and carries on past it while the pins scatter."
+                ),
+                "zh": (
+                    "保龄球滚下球道撞进保龄球瓶阵,从瓶阵正面穿过并继续前行,球瓶"
+                    "被撞散。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The bowling ball, 3 kg, is rolled at 8 m/s down the lane "
+                    "into the bowling pin set. It ploughs through the front "
+                    "of the formation and carries 14.35 m in all; the pins "
+                    "scatter for 6.67 m of travel between them, the head pin "
+                    "alone accounting for 4.08 m."
+                ),
+                "zh": (
+                    "3 kg 的保龄球以 8 m/s 滚下球道撞进保龄球瓶阵,从"
+                    "瓶阵正面穿过,全程 14.35 m。球瓶被撞散,三只加起来移"
+                    "动 6.67 m,其中头瓶一只就占了 4.08 m。"
+                ),
+            },
+        },
         'case_dir': str(source_dir.resolve()),
         'status': 'pending',
     }
@@ -344,6 +385,7 @@ def main() -> None:
             'prompts_json': str(prompts_path.resolve()),
             'edit_dsl': edit_info['edit_dsl'],
             'edit_summary': edit_info['edit_summary'],
+            'applies_from_frame': edit_info['applies_from_frame'],
             'physics_diff': edit_info['physics_diff'],
             'prompts': edit_info['prompts'],
             'status': 'pending',

@@ -24,6 +24,7 @@ DIRECT_MP4_NAME = f"{OUTPUT_STEM}.mp4"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
 TABLE_SIZE = 0.6
@@ -598,6 +599,14 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
 
     script_path = Path(__file__).with_name("simulate_ramp_collision.py")
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     marble_active = physics.get("marble_active", [1, 1])
     marble_initial_velocities = physics.get(
         "marble_initial_velocities",
@@ -662,11 +671,13 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             str(float(marble_masses[0])),
             "--marble-mass-1",
             str(float(marble_masses[1])),
-        ],
+        ]
+        + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
         check=True,
     )
     records = json.loads(physics_path.read_text(encoding="utf-8"))
     physics_path.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return records
 
 
@@ -717,6 +728,53 @@ def apply_physics_animation(
             marble_obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
     set_linear_keyframes([falling_marble, *active_marbles])
+    apply_disappearances(stationary_marbles, physics)
+
+
+def apply_disappearances(
+    stationary_marbles: list[bpy.types.Object],
+    physics: dict,
+) -> None:
+    """Make a marble the simulation removed mid-run leave the picture.
+
+    A whole-clip delete never builds the object at all; this is the other kind,
+    where the marble is in the video doing what it does in the source and then
+    is not. The frame the simulation stopped reporting it is the first frame it
+    is invisible on, and the keyframes are CONSTANT so it vanishes between two
+    frames instead of fading across them.
+    """
+    for idx, marble_obj in enumerate(stationary_marbles):
+        if marble_obj is None:
+            continue
+        gone_at = next(
+            (int(f["frame_index"]) for f in physics["frames"]
+             if not f["marbles"][idx]["active"]),
+            None,
+        )
+        if gone_at is None or gone_at <= 1:
+            continue
+        for path in ("hide_viewport", "hide_render"):
+            setattr(marble_obj, path, False)
+            marble_obj.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(marble_obj, path, True)
+            marble_obj.keyframe_insert(data_path=path, frame=gone_at)
+    for marble_obj in stationary_marbles:
+        if marble_obj is None or not marble_obj.animation_data:
+            continue
+        for fcurve in marble_obj.animation_data.action.fcurves:
+            if fcurve.data_path not in ("hide_viewport", "hide_render"):
+                continue
+            for key in fcurve.keyframe_points:
+                key.interpolation = "CONSTANT"
+
+
+def removal_frame(physics: dict, idx: int) -> int | None:
+    """The first frame marble ``idx`` is absent on, if it starts out present."""
+    frames = physics["frames"]
+    if not frames or not frames[0]["marbles"][idx]["active"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames
+                 if not f["marbles"][idx]["active"]), None)
 
 
 def export_ground_truth(
@@ -748,6 +806,10 @@ def export_ground_truth(
                     "radius_m_scene_units": MARBLE_RADIUS,
                     "index": idx,
                     "active": marble is not None,
+                    # The frame it stops being on screen, for a marble a timed
+                    # edit takes away partway through; None when it is there
+                    # for the whole clip (or was never there at all).
+                    "removed_at_frame": removal_frame(physics, idx),
                 }
                 for idx, marble in enumerate(stationary_marbles)
             ],
@@ -784,6 +846,11 @@ def export_ground_truth(
                 "falling_marble_floor_gap": physics_frame["ball_floor_gap"],
                 "stationary_marbles": [
                     (
+                        # Inactive either because the edit removed the marble
+                        # before the clip started, or because a timed edit
+                        # removed it at this frame. Both read the same here:
+                        # nothing of it is on screen, and the pose recorded is
+                        # the last one it had.
                         {
                             "active": False,
                             "matrix_world": None,
@@ -792,7 +859,7 @@ def export_ground_truth(
                             "angular_velocity": marble_data["angular_velocity"],
                             "gap_to_ball": marble_data["gap_to_ball"],
                         }
-                        if marble is None
+                        if marble is None or not marble_data["active"]
                         else {
                             "active": True,
                             "matrix_world": [[float(v) for v in row] for row in marble.matrix_world],

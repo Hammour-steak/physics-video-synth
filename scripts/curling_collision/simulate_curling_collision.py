@@ -43,6 +43,20 @@ def parse_args() -> argparse.Namespace:
         help="Magnitude for the yellow (stone_2) stone's initial speed along -x. "
         "Defaults to --launch-speed if unset.")
     parser.add_argument("--start-separation", type=float, default=5.0)
+    # Explicit start positions. Left at None the two stones are placed at
+    # -/+ separation/2 exactly as before, so every existing caller is
+    # unchanged; the PCVE vocabulary passes them so that the edit DSL has a
+    # physics key to read an object's centre out of.
+    parser.add_argument("--stone-1-x", type=float, default=None)
+    parser.add_argument("--stone-1-y", type=float, default=None)
+    parser.add_argument("--stone-2-x", type=float, default=None)
+    parser.add_argument("--stone-2-y", type=float, default=None)
+    # A third stone, off by default and stationary when on. This is the scene's
+    # PCVE ADD surface: an edit turns the slot on and names where it sits.
+    parser.add_argument("--stone-3-active", type=int, default=0)
+    parser.add_argument("--stone-3-x", type=float, default=0.0)
+    parser.add_argument("--stone-3-y", type=float, default=0.0)
+    parser.add_argument("--stone-3-mass", type=float, default=20.0)
     parser.add_argument("--gravity-z", type=float, default=-9.8)
     return parser.parse_args()
 
@@ -61,15 +75,31 @@ def simulate(args: argparse.Namespace) -> dict:
     speed_1 = float(args.stone_1_launch_speed) if args.stone_1_launch_speed is not None else speed
     speed_2 = float(args.stone_2_launch_speed) if args.stone_2_launch_speed is not None else speed
 
+    def placed(x, y, fallback_x):
+        return (
+            float(x) if x is not None else fallback_x,
+            float(y) if y is not None else 0.0,
+            FLOOR_Z + half_height,
+        )
+
+    third_active = bool(int(args.stone_3_active))
+
+    # Three slots always, so the renderer and the ground truth see one fixed
+    # layout and only have to read `active`. The third stone is stationary --
+    # it is something placed on the ice for the other two to run into, not a
+    # third throw.
     initial_locations = [
-        (-separation / 2.0, 0.0, FLOOR_Z + half_height),
-        (separation / 2.0, 0.0, FLOOR_Z + half_height),
+        placed(args.stone_1_x, args.stone_1_y, -separation / 2.0),
+        placed(args.stone_2_x, args.stone_2_y, separation / 2.0),
+        placed(args.stone_3_x, args.stone_3_y, 0.0),
     ]
     initial_velocities = [
         (speed_1, 0.0, 0.0),
         (-speed_2, 0.0, 0.0),
+        (0.0, 0.0, 0.0),
     ]
-    masses = [float(args.stone_mass), float(args.stone_2_mass)]
+    masses = [float(args.stone_mass), float(args.stone_2_mass), float(args.stone_3_mass)]
+    active = [True, True, third_active]
 
     client = p.connect(p.DIRECT)
     try:
@@ -102,8 +132,13 @@ def simulate(args: argparse.Namespace) -> dict:
         stone_shape = p.createCollisionShape(
             p.GEOM_CYLINDER, radius=radius, height=height, physicsClientId=client,
         )
-        stone_ids = []
-        for location, velocity, mass in zip(initial_locations, initial_velocities, masses):
+        stone_ids: list[int | None] = []
+        for location, velocity, mass, is_on in zip(
+            initial_locations, initial_velocities, masses, active
+        ):
+            if not is_on:
+                stone_ids.append(None)
+                continue
             stone_id = p.createMultiBody(
                 baseMass=mass,
                 baseCollisionShapeIndex=stone_shape,
@@ -131,6 +166,9 @@ def simulate(args: argparse.Namespace) -> dict:
 
         frames = []
         min_gap = float("inf")
+        # Separations against the ADDed stone, so a sweep can see which of the
+        # two throws reaches it first without replaying the whole path.
+        pair_gaps = {"min_gap_1_3": float("inf"), "min_gap_3_2": float("inf")}
 
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
@@ -139,11 +177,20 @@ def simulate(args: argparse.Namespace) -> dict:
 
             stone_data = []
             positions = []
-            for stone_id in stone_ids:
-                pos, quat = p.getBasePositionAndOrientation(stone_id, physicsClientId=client)
-                lin, ang = p.getBaseVelocity(stone_id, physicsClientId=client)
+            for idx, stone_id in enumerate(stone_ids):
+                if stone_id is None:
+                    # Absent slot: frozen at its start pose so the frame layout
+                    # never changes shape, and flagged so consumers can skip it.
+                    pos, quat = initial_locations[idx], (0.0, 0.0, 0.0, 1.0)
+                    lin = ang = (0.0, 0.0, 0.0)
+                    present = False
+                else:
+                    pos, quat = p.getBasePositionAndOrientation(stone_id, physicsClientId=client)
+                    lin, ang = p.getBaseVelocity(stone_id, physicsClientId=client)
+                    present = True
                 positions.append(pos)
                 stone_data.append({
+                    "present": present,
                     "location": list(pos),
                     "quaternion_xyzw": list(quat),
                     "linear_velocity": list(lin),
@@ -152,6 +199,10 @@ def simulate(args: argparse.Namespace) -> dict:
 
             gap = math.dist(positions[0][:2], positions[1][:2]) - 2 * radius
             min_gap = min(min_gap, gap)
+            if third_active:
+                for a, b, key in ((0, 2, "min_gap_1_3"), (2, 1, "min_gap_3_2")):
+                    g = math.dist(positions[a][:2], positions[b][:2]) - 2 * radius
+                    pair_gaps[key] = min(pair_gaps[key], g)
 
             frames.append({
                 "frame_index": frame_index,
@@ -159,7 +210,10 @@ def simulate(args: argparse.Namespace) -> dict:
                 "stones": stone_data,
             })
 
-        final_frame = frames[-1]["stones"]
+        # Only stones that are actually on the ice count: an absent slot sits
+        # at a constant zero and would otherwise read as "at rest" and pad the
+        # list, changing what `final_speeds` means between runs.
+        final_frame = [s for s in frames[-1]["stones"] if s["present"]]
         final_speeds = [
             math.sqrt(sum(v * v for v in s["linear_velocity"])) for s in final_frame
         ]
@@ -176,7 +230,9 @@ def simulate(args: argparse.Namespace) -> dict:
             "physics_dt": dt,
             "objects": {
                 "stones": {
-                    "count": 2,
+                    "count": sum(1 for a in active if a),
+                    "slots": len(initial_locations),
+                    "active": [bool(a) for a in active],
                     "radius": radius,
                     "height": height,
                     "masses": masses,
@@ -192,6 +248,7 @@ def simulate(args: argparse.Namespace) -> dict:
             },
             "quality": {
                 "min_gap": min_gap,
+                **({k: v for k, v in pair_gaps.items()} if third_active else {}),
                 "final_speeds": final_speeds,
                 "both_at_rest": both_at_rest,
             },

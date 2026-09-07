@@ -76,20 +76,20 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_dead_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=6102,
-        dsl="SET ball_a.restitution FROM 0.88 TO 0.2",
+        dsl="SET ball_a.restitution TIMES 0.25",
         edit_summary=(
-            "Ball made far less bouncy. Bullet multiplies the pair, so the "
-            "effective restitution against the chest drops from 0.64 to 0.16, "
-            "and the rebound flattens to 64.9 deg off the normal (source 29.2). "
-            "The ball turns almost along the panel, misses the football, and "
-            "comes to rest well south of it."
+            "Star ball made far less bouncy, so its rebound off the chest "
+            "panel flattens out and it comes away on a much shallower "
+            "line. It runs 1.66 m from its start against the baseline's "
+            "1.10 m and misses the football entirely: the little football "
+            "never moves, where the baseline nudges it 0.30 m."
         ),
     ),
     EditCase(
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
         seed=6103,
-        dsl="SET ball_a.initial_velocity FROM 2.6 TO 1.95",
+        dsl="SET ball_a.initial_velocity TIMES 0.75",
         edit_summary=(
             "A gentler push, aimed identically. This is the suite's distractor: "
             "the bounce geometry is untouched -- 29.4 deg out against the "
@@ -104,7 +104,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_draggy_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=6104,
-        dsl="SET ball_a.friction FROM 1 TO 5",
+        dsl="SET ball_a.friction TIMES 5",
         edit_summary=(
             "The rolling ball made to drag on the boards -- a scuffed, tacky "
             "ball rather than a changed floor. Because Bullet builds rolling "
@@ -122,7 +122,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_target",
         source_case_id=SOURCE_CASE_ID,
         seed=6105,
-        dsl="SET ball_b.mass FROM 0.09 TO 0.9",
+        dsl="SET ball_b.mass TIMES 10",
         edit_summary=(
             "The football made 10x heavier. The roll, the bounce and the "
             "rebound line are identical to the source, and the ball still "
@@ -135,7 +135,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=6106,
-        dsl="SET ball_a.mass FROM 0.12 TO 1.2",
+        dsl="SET ball_a.mass TIMES 10",
         edit_summary=(
             "The rolling ball made 10x heavier. The bounce off the chest is "
             "unchanged -- restitution sets the rebound, not mass -- but the "
@@ -156,6 +156,28 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "hit, the ball keeps its 1.72 m/s and rolls on towards the camera, "
             "leaving frame at the bottom edge around frame 48 and coming to "
             "rest off-camera. The last second of the clip is bare floor."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_target: they differ by the
+    # AT FRAME clause alone. Taking the football away after it has been hit is
+    # what makes the timing readable -- removing it beforehand leaves the star
+    # ball nothing to hand its speed to.
+    EditCase(
+        case_id="edit_remove_target_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=12107,
+        dsl="DELETE ball_b AT FRAME 32",
+        edit_summary=(
+            "Football removed at frame 32, eight frames after the star ball "
+            "reaches it at frame 24. Frames 1-31 are the source video frame "
+            "for frame: the star ball rebounds off the toy chest at frame 13, "
+            "runs into the football and is left creeping at 0.07 m/s, and the "
+            "football has been driven 0.18 m when it disappears. The star "
+            "ball then settles at (+0.27, +0.62) exactly as in the source. "
+            "The whole-clip version of the same delete is a different video "
+            "again: with no football to hit, the star ball keeps 1.0 m/s off "
+            "the rebound and coasts out to (+0.99, +1.39)."
         ),
     ),
 )
@@ -285,15 +307,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -308,6 +335,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -330,6 +358,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -347,6 +386,7 @@ def main() -> None:
             "physics diff are all derived from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -361,13 +401,34 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. The ball is rolled at 2.60 m/s, "
-            "meets the toy chest's front panel on frame 13 at 2.36 m/s and "
-            "30 deg off the normal, leaves at 29.2 deg and 1.72 m/s, and hits "
-            "the little football on frame 24, knocking it 0.30 m clear. Both "
-            "balls have settled by frame 45."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The star ball is rolled at the toy chest's front panel, "
+                    "comes off it at an angle, and goes on to hit the little "
+                    "football and knock it clear. Both have settled before "
+                    "the clip ends."
+                ),
+                "zh": (
+                    "星星球滚向玩具箱的正面板,斜着弹开后撞上小足球并把它撞开。片"
+                    "尾前两球都已静止。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The star ball is rolled at 2.60 m/s at the toy chest's "
+                    "front panel, comes off it at an angle, and goes on to "
+                    "hit the little football, knocking it 0.30 m clear. The "
+                    "star ball ends 1.10 m from where it started; both have "
+                    "settled before the clip ends."
+                ),
+                "zh": (
+                    "星星球以 2.60 m/s 滚向玩具箱的正面板,斜着弹开后撞"
+                    "上小足球,把它撞开 0.30 m。星星球相对起点移动 1.1"
+                    "0 m,片尾前两球都已静止。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -415,6 +476,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

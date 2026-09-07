@@ -72,49 +72,48 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_dead_red_die",
         source_case_id=SOURCE_CASE_ID,
         seed=7101,
-        dsl="SET red_die.restitution FROM 0.72 TO 0.05",
+        dsl="SET red_die.restitution TIMES 0.05",
         edit_summary=(
-            "Red die's restitution killed (0.72 -> 0.05). Its first floor "
-            "contact goes almost fully inelastic: instead of the baseline's "
-            "five bounces up to 15 cm, the red die simply thuds and comes "
-            "to rest -- zero bounces, settled by frame 7. The white die is "
-            "untouched."
+            "Red die's restitution killed. Its first tray contact goes "
+            "almost fully inelastic: no bounces at all against the "
+            "baseline's three, and a 0.60 m path -- a straight drop and a "
+            "stop -- instead of 1.04 m. The white die is untouched."
         ),
     ),
     EditCase(
         case_id="edit_bouncy_white_die",
         source_case_id=SOURCE_CASE_ID,
         seed=7102,
-        dsl="SET white_die.restitution FROM 0.72 TO 0.95",
+        dsl="SET white_die.restitution TIMES 1.3",
         edit_summary=(
-            "White die made near-perfectly bouncy (0.72 -> 0.95). It springs "
-            "back to 25 cm above the tray (vs the baseline's 14 cm), keeps "
-            "bouncing eight times instead of five, and does not settle until "
-            "frame 49. The red die is untouched."
+            "White die made near-perfectly bouncy. It keeps six bounces "
+            "instead of four and covers a 1.86 m path in the tray against "
+            "the baseline's 1.13 m before settling. The red die is "
+            "untouched and lands exactly as it does in the source."
         ),
     ),
     EditCase(
         case_id="edit_hard_throw_red_die",
         source_case_id=SOURCE_CASE_ID,
         seed=7103,
-        dsl="SET red_die.initial_velocity FROM 1.5 TO 5.0",
+        dsl="SET red_die.initial_velocity TIMES 3",
         edit_summary=(
-            "Red die thrown much harder (1.5 -> 5.0 m/s downward). It hits "
-            "the tray with more kinetic energy and rebounds to 55 cm above "
-            "the tray -- almost 4x the baseline's 15 cm bounce -- before "
-            "settling. The white die is untouched."
+            "Red die thrown three times harder. It hits the tray at 5.27 "
+            "m/s instead of 3.50, and the extra energy shows in the "
+            "scatter: four bounces instead of three, and a 2.16 m path "
+            "against the baseline's 1.04 m. The white die is untouched."
         ),
     ),
     EditCase(
         case_id="edit_hard_throw_white_die",
         source_case_id=SOURCE_CASE_ID,
         seed=7104,
-        dsl="SET white_die.initial_velocity FROM 0.8 TO 3.0",
+        dsl="SET white_die.initial_velocity TIMES 4",
         edit_summary=(
-            "White die thrown much harder (0.8 -> 3.0 m/s downward). Its "
-            "first bounce peaks at 26 cm above the tray, up from the "
-            "baseline's 14 cm, and it takes longer to settle. The red die "
-            "is untouched."
+            "White die thrown four times harder. It reaches the tray at "
+            "4.38 m/s instead of 3.61 and scatters further -- a 1.50 m "
+            "path against the baseline's 1.13 m -- though it still "
+            "settles in four bounces. The red die is untouched."
         ),
     ),
     EditCase(
@@ -256,15 +255,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -279,6 +283,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -301,6 +306,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -318,6 +334,7 @@ def main() -> None:
             "from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -332,13 +349,34 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. A red die and a white die are "
-            "thrown straight down into the mahjong table's centre tray -- "
-            "red from 0.60 m at 1.5 m/s, white from 0.65 m at 0.8 m/s. No "
-            "spin, no lateral push. Both bounce roughly five times up to "
-            "about 15 cm and settle within ~1.25 s."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The red die and the white die are dropped straight down "
+                    "into the mahjong table's centre tray. Neither is spun or "
+                    "pushed sideways; each bounces a few times and settles."
+                ),
+                "zh": (
+                    "红色骰子和白色骰子垂直落进麻将桌中央的骰盅。两颗都没有旋转和"
+                    "横向推力,各弹几下后停稳。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The red die and the white die are dropped straight down "
+                    "into the mahjong table's centre tray -- the red die "
+                    "through 0.60 m at 1.5 m/s, the white die through 0.65 m "
+                    "at 0.8 m/s. No spin and no lateral push; each bounces a "
+                    "few times and both settle well before the clip ends."
+                ),
+                "zh": (
+                    "红色骰子和白色骰子垂直落进麻将桌中央的骰盅 —— 红色骰子下"
+                    "落 0.60 m、初速 1.5 m/s,白色骰子下落 0.6"
+                    "5 m、初速 0.8 m/s。没有旋转也没有横向推力,各弹几"
+                    "下后都在片尾前很早就停稳。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -382,6 +420,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

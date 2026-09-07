@@ -63,12 +63,13 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_gentle_launch',
         source_case_id=SOURCE_CASE_ID,
         seed=9101,
-        dsl='SET stones.initial_velocity FROM 1.5 TO 0.5',
+        dsl='SET stones.initial_velocity TIMES 0.3',
         edit_summary=(
-            'Both stones launched at one-third of the source speed. Ice '
-            'friction bleeds them off before they meet: they stop about '
-            '2.2 m apart at +/-1.12 m, never colliding at all, instead of '
-            'meeting head-on around frame 39.'
+            "Both stones launched at 0.45 m/s instead of 1.5. They cover "
+            "1.61 m each instead of 2.08 m and are still 1.78 m apart, at "
+            "x=-0.89 and x=+0.89, when the clip ends -- still drifting at "
+            "0.36 m/s but nowhere near meeting. No collision happens at "
+            "all."
         ),
     ),
     # --- per-stone mass edits ------------------------------------------
@@ -76,7 +77,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_heavy_yellow',
         source_case_id=SOURCE_CASE_ID,
         seed=9102,
-        dsl='SET yellow_stone.mass FROM 20.0 TO 60.0',
+        dsl='SET yellow_stone.mass TIMES 3',
         edit_summary=(
             'Yellow stone made 3x heavier. The head-on impact is no longer '
             'balanced: yellow only gives ground to -0.78 m, while red rebounds '
@@ -88,7 +89,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_light_yellow',
         source_case_id=SOURCE_CASE_ID,
         seed=9103,
-        dsl='SET yellow_stone.mass FROM 20.0 TO 4.0',
+        dsl='SET yellow_stone.mass TIMES 0.2',
         edit_summary=(
             'Yellow stone made 5x lighter. Momentum from the red stone shoves '
             'it clear across the ice to +1.76 m, while the red stone barely '
@@ -101,7 +102,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_red_hard_throw',
         source_case_id=SOURCE_CASE_ID,
         seed=9104,
-        dsl='SET red_stone.initial_velocity FROM 1.5 TO 3.0',
+        dsl='SET red_stone.initial_velocity TIMES 2',
         edit_summary=(
             'Red stone launched twice as fast; yellow still 1.5 m/s. The '
             'head-on impact is one-sided and happens earlier (frame 26): red '
@@ -114,20 +115,22 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_red_soft_throw',
         source_case_id=SOURCE_CASE_ID,
         seed=9105,
-        dsl='SET red_stone.initial_velocity FROM 1.5 TO 0.7',
+        dsl='SET red_stone.initial_velocity TIMES 0.5',
         edit_summary=(
-            'Red stone launched at less than half the yellow stone speed. '
-            'Yellow now carries the momentum: contact is delayed to frame 53 '
-            'and both stones end up on the red side of centre (red -1.43, '
-            'yellow -0.93) -- the DSL-opposite of edit_red_hard_throw and a '
-            'distinct visual (the yellow stone is what crosses centre).'
+            "Red thrown at half the yellow stone's speed. Yellow now "
+            "carries the exchange: it runs 3.69 m and pushes through to "
+            "x=-1.19, deep on red's side of centre, while red is turned "
+            "back -- it covers a 2.29 m path but ends only 0.80 m from "
+            "where it started, at x=-1.70. The DSL-opposite of "
+            "edit_red_hard_throw, and a distinct picture: the yellow "
+            "stone is the one that crosses centre."
         ),
     ),
     EditCase(
         case_id='edit_yellow_at_rest',
         source_case_id=SOURCE_CASE_ID,
         seed=9106,
-        dsl='SET yellow_stone.initial_velocity FROM 1.5 TO 0.0',
+        dsl='SET yellow_stone.initial_velocity TIMES 0',
         edit_summary=(
             'Yellow stone starts at rest instead of sliding in. Red stone '
             'launched at the same 1.5 m/s from 5 m away rolls in alone -- but '
@@ -141,12 +144,63 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_bouncy_stones',
         source_case_id=SOURCE_CASE_ID,
         seed=9107,
-        dsl='SET stones.restitution FROM 0.0 TO 0.95',
+        dsl='SET stones.restitution TO 0.95',
         edit_summary=(
             'Pair restitution raised from perfectly inelastic to near-elastic. '
             'The symmetric collision now rebounds cleanly: stones bounce apart '
             'and end the clip at +/-0.95 m (baseline +/-0.32) still drifting '
             'away from centre.'
+        ),
+    ),
+    # --- ADD: a third stone set down on the red-yellow line ---------------
+    # Restitution here is 0, so every one of these is a sticking collision:
+    # a throw that reaches the blue stone does not bounce off it, it picks it
+    # up and the pair carries on together. That is what makes where the stone
+    # sits matter so much -- it decides which throw gets to it first, and
+    # therefore which side of the sheet the whole pile ends up on.
+    EditCase(
+        case_id='edit_add_stone_before_red',
+        source_case_id=SOURCE_CASE_ID,
+        seed=9108,
+        dsl='ADD blue_stone BETWEEN red_stone AND yellow_stone AT 1/4 FROM red_stone',
+        edit_summary=(
+            "A blue stone set down at the quarter point of the "
+            "red-to-yellow line nearest the red throw, 1.25 m in front of "
+            "it. Red closes that gap and sticks to it -- restitution is 0 "
+            "on this ice -- stopping after 1.76 m against the baseline's "
+            "2.08 m. Blue is driven 0.81 m down the sheet into the "
+            "oncoming yellow, and yellow is the stone that ends up past "
+            "centre on red's side, at x=-0.10 after 2.60 m of travel."
+        ),
+    ),
+    EditCase(
+        case_id='edit_add_stone_centre',
+        source_case_id=SOURCE_CASE_ID,
+        seed=9109,
+        dsl='ADD blue_stone BETWEEN red_stone AND yellow_stone AT MIDPOINT',
+        edit_summary=(
+            "A blue stone set down at the midpoint of the line between "
+            "the two throws, in the gap they close in the baseline "
+            "without quite touching. Both arrive on it and it is pinned "
+            "between them: it shifts 13 mm and stops. Red and yellow are "
+            "each stopped short of where they got to on their own -- "
+            "x=-0.61 and x=+0.55 against the baseline's -0.42 and +0.42 "
+            "-- because the stone between them takes up the gap they used "
+            "to close."
+        ),
+    ),
+    EditCase(
+        case_id='edit_add_stone_before_yellow',
+        source_case_id=SOURCE_CASE_ID,
+        seed=9110,
+        dsl='ADD blue_stone BETWEEN red_stone AND yellow_stone AT 1/4 FROM yellow_stone',
+        edit_summary=(
+            "The mirror of edit_add_stone_before_red, measured from the "
+            "yellow throw instead. Yellow sticks to the blue stone after "
+            "1.78 m, blue is driven 0.83 m into the oncoming red, and red "
+            "is the one that carries through: it travels 2.63 m and "
+            "finishes past centre on yellow's side at x=+0.13. Same "
+            "division point in the prompt, opposite end of the sheet."
         ),
     ),
 )
@@ -264,15 +318,29 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f'{parsed.property_name} ({parsed.object_id})':
                 {'from': dsl.baseline_value_for(parsed, VOCAB), 'to': parsed.to_value}}
+    elif isinstance(parsed, dsl.AddEdit):
+        diff = {parsed.object_id: {
+            "from": "absent",
+            "to": "present",
+            # Both halves: the division point the edit was written as, and the
+            # centre it resolves to, so a consumer can score a predicted
+            # placement without re-running the resolver.
+            "position": dsl.add_position_diff(parsed, VOCAB),
+        }}
     else:
         diff = {parsed.object_id: {'from': 'present', 'to': 'removed'}}
+    diff['timing'] = dsl.timing_diff(parsed, VOCAB)
     return {
         'edit_dsl': case.dsl,
         'edit_summary': case.edit_summary,
+        'applies_from_frame': dsl.starts_at_frame(parsed),
         'prompts': dsl.make_prompts(parsed, VOCAB),
         'physics_diff': diff,
         'physics_override': physics,
@@ -287,6 +355,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         'source_case_id': case.source_case_id,
         'edit_dsl': edit_info['edit_dsl'],
         'edit_summary': edit_info['edit_summary'],
+        'applies_from_frame': edit_info['applies_from_frame'],
         'physics_diff': edit_info['physics_diff'],
         'prompts': edit_info['prompts'],
     })
@@ -309,6 +378,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -327,6 +407,7 @@ def main() -> None:
             'overrides, and the physics diff are derived from that string.'
         ),
         'baseline_physics': BASELINE_PHYSICS,
+        'total_frames': edit_vocab.TOTAL_FRAMES,
         'resolution': [int(args.resolution[0]), int(args.resolution[1])],
         'fps': int(args.fps),
         'duration_sec': float(args.duration_sec),
@@ -341,12 +422,35 @@ def main() -> None:
     source_record: dict[str, Any] = {
         'case_id': SOURCE_CASE_ID,
         'kind': 'source',
-        'description': (
-            'Source video: baseline parameters. Two equal 20 kg curling '
-            'stones launched at each other at 0.9 m/s from 5 m apart, meet '
-            'head-on at the centre of the sheet and both come to rest '
-            'touching (perfectly inelastic collision, restitution 0.0).'
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The red stone and the yellow stone are launched at each "
+                    "other from opposite ends of the sheet. The two stones "
+                    "slide in and come to rest either side of the centre "
+                    "line, close but without quite touching."
+                ),
+                "zh": (
+                    "红色冰壶和黄色冰壶从冰道两端相向掷出。两只冰壶各自滑行后停在"
+                    "中线两侧,靠得很近却没真正碰上。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The red stone and the yellow stone, both 20 kg, are "
+                    "launched at each other at 1.5 m/s from 5 m apart. The "
+                    "two stones each slide 2.08 m and close to within 9 mm "
+                    "around frame 40 without quite touching, settling at "
+                    "x=-0.42 and x=+0.42 either side of the centre line."
+                ),
+                "zh": (
+                    "红色冰壶和黄色冰壶都是 20 kg,从相距 5 m 处以 1"
+                    ".5 m/s 相向掷出。两只冰壶各自滑行 2.08 m,在第"
+                    " 40 帧前后相距不到 9 mm 却没真正碰上,最后停在中线"
+                    "两侧的 x=-0.42 和 x=+0.42。"
+                ),
+            },
+        },
         'case_dir': str(source_dir.resolve()),
         'status': 'pending',
     }
@@ -390,6 +494,7 @@ def main() -> None:
             'prompts_json': str(prompts_path.resolve()),
             'edit_dsl': edit_info['edit_dsl'],
             'edit_summary': edit_info['edit_summary'],
+            'applies_from_frame': edit_info['applies_from_frame'],
             'physics_diff': edit_info['physics_diff'],
             'prompts': edit_info['prompts'],
             'status': 'pending',

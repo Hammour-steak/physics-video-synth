@@ -145,7 +145,7 @@ def parse_args() -> argparse.Namespace:
     # and every existing caller are unchanged.
     parser.add_argument(
         "--mallet-masses",
-        nargs=3,
+        nargs=4,
         type=float,
         default=None,
         help="Per-mallet mass in kg, in relay order (blue, red, white). "
@@ -153,7 +153,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mallet-restitutions",
-        nargs=3,
+        nargs=4,
         type=float,
         default=None,
         help="Per-mallet restitution, in relay order. Overrides "
@@ -162,7 +162,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mallet-frictions",
-        nargs=3,
+        nargs=4,
         type=float,
         default=None,
         help="Per-mallet lateral friction, in relay order. Overrides "
@@ -170,16 +170,85 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mallet-active",
-        nargs=3,
+        nargs=4,
         type=int,
-        default=(1, 1, 1),
-        help="Which mallets exist, in relay order. A 0 removes that mallet "
-        "from the simulation entirely; its frames still appear in the output "
+        default=(1, 1, 1, 0),
+        help="Which mallets exist. Slots 0-2 are the blue, red and white "
+        "relay and are on by default; slot 3 is the green mallet, which is "
+        "off unless a PCVE ADD edit places it. A 0 removes that mallet from "
+        "the simulation entirely; its frames still appear in the output "
         "(frozen at its start position, active=false) so consumers keep a "
-        "fixed three-slot layout.",
+        "fixed four-slot layout.",
+    )
+    parser.add_argument(
+        "--mallet-3-x",
+        type=float,
+        default=None,
+        help="Where along the table the green mallet sits. Only meaningful "
+        "when slot 3 is active. Defaults to the midpoint of the red-to-white "
+        "gap, which is where an ADD edit that names no distance would land.",
     )
     parser.add_argument("--gravity-z", type=float, default=-9.8)
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def load_timed_edits(path: Path | None) -> dict[int, dict]:
+    """Read the schedule into {frame: merged params}."""
+    if path is None:
+        return {}
+    entries = json.loads(Path(path).read_text(encoding="utf-8"))
+    schedule: dict[int, dict] = {}
+    for entry in entries:
+        frame = int(entry["frame"])
+        if frame < 2:
+            raise ValueError(
+                f"Timed edit at frame {frame}: frame 1 is the initial state, "
+                "which is set through the ordinary CLI parameters."
+            )
+        schedule.setdefault(frame, {}).update(dict(entry["params"]))
+    return schedule
+
+
+def apply_timed_params(client: int, params: dict, *, mallets: list) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    Only the parameters this scene's edit vocabulary can produce are handled;
+    an unrecognised key raises rather than being ignored, because a silently
+    dropped edit renders as a video that looks like the baseline and would be
+    indistinguishable from a correct one in the benchmark.
+
+    Removing a mallet is a real ``removeBody``: it stops colliding from this
+    frame on, which is the point of taking the middle disc away after it has
+    been struck but before it reaches the next one -- the relay's first handoff
+    happened and its second never does.
+    """
+    for key, value in params.items():
+        if key == "mallet_active":
+            for index, is_active in enumerate(value):
+                if int(is_active) or index >= len(mallets) or mallets[index] is None:
+                    continue
+                p.removeBody(mallets[index], physicsClientId=client)
+                mallets[index] = None
+        elif key in ("mallet_masses", "mallet_frictions", "mallet_restitutions"):
+            field = {"mallet_masses": "mass",
+                     "mallet_frictions": "lateralFriction",
+                     "mallet_restitutions": "restitution"}[key]
+            for index, new_value in enumerate(value):
+                if index >= len(mallets) or mallets[index] is None:
+                    continue
+                p.changeDynamics(mallets[index], -1, **{field: float(new_value)},
+                                 physicsClientId=client)
+        else:
+            raise ValueError(
+                f"Timed edit sets {key!r}, which this scene cannot change "
+                "mid-run. Add it to apply_timed_params or write the edit as a "
+                "whole-clip edit."
+            )
 
 
 def make_static_box(client, half_extents, position, friction, restitution):
@@ -198,11 +267,19 @@ def simulate(args: argparse.Namespace) -> dict:
     substeps = int(args.substeps)
     dt = 1.0 / float(fps * substeps)
     push = float(args.push_speed)
+    timed_edits = load_timed_edits(args.timed_edits_json)
+    latest_edit_frame = max(timed_edits, default=0)
+    if latest_edit_frame > frame_end:
+        raise ValueError(
+            f"Timed edit at frame {latest_edit_frame} is past the end of a "
+            f"{frame_end}-frame clip"
+        )
 
     # Resolve the per-mallet properties. The list forms win; where they are
     # absent every mallet takes the global value (and the middle one its mass
     # scale), which reproduces the pre-PCVE behaviour exactly.
     active = tuple(bool(int(v)) for v in args.mallet_active)
+    n_slots = len(active)
     if args.mallet_masses is not None:
         masses = tuple(float(v) for v in args.mallet_masses)
     else:
@@ -210,19 +287,28 @@ def simulate(args: argparse.Namespace) -> dict:
             MALLET_MASS,
             MALLET_MASS * float(args.middle_mass_scale),
             MALLET_MASS,
+            MALLET_MASS,
         )
     if args.mallet_restitutions is not None:
         restitutions = tuple(float(v) for v in args.mallet_restitutions)
     else:
-        restitutions = (float(args.mallet_restitution),) * 3
+        restitutions = (float(args.mallet_restitution),) * n_slots
     if args.mallet_frictions is not None:
         frictions = tuple(float(v) for v in args.mallet_frictions)
     else:
-        frictions = (float(args.mallet_friction),) * 3
+        frictions = (float(args.mallet_friction),) * n_slots
 
+    # Slots 0-2 keep the quarter/half/three-quarter layout the relay was built
+    # on. Slot 3 -- the green mallet -- is placed wherever the caller says;
+    # unspecified it sits halfway down the last gap.
+    green_x = (
+        float(args.mallet_3_x) if args.mallet_3_x is not None
+        else START_X + 2.5 * SPACING
+    )
     start_positions = [
         (START_X + index * SPACING, RELAY_Y, MALLET_HEIGHT / 2.0) for index in range(3)
     ]
+    start_positions.append((green_x, RELAY_Y, MALLET_HEIGHT / 2.0))
 
     client = p.connect(p.DIRECT)
     try:
@@ -278,7 +364,7 @@ def simulate(args: argparse.Namespace) -> dict:
         # ground truth always see the same three-mallet layout and only have to
         # read the active flag.
         mallets: list[int | None] = []
-        for index in range(3):
+        for index in range(n_slots):
             if not active[index]:
                 mallets.append(None)
                 continue
@@ -334,19 +420,30 @@ def simulate(args: argparse.Namespace) -> dict:
         # Peak speed each mallet ever reaches, and the speed each one is left
         # with once the chain has passed it -- together these are what "the
         # striker stopped dead and handed everything over" actually means.
-        peak_speed = [0.0, 0.0, 0.0]
-        started = [False, False, False]
+        peak_speed = [0.0] * n_slots
+        started = [False] * n_slots
+        # Where each mallet was last seen. One removed partway through has a
+        # real pose to freeze at; one that was never built keeps its start
+        # placement, which is what the output carried before timed edits.
+        last_pose = [
+            {"location": list(sp), "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]}
+            for sp in start_positions
+        ]
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
+            # The edit lands at the top of its frame: this frame is the first
+            # one that shows it, and every frame before it is the source video.
+            if frame_index in timed_edits:
+                apply_timed_params(client, timed_edits[frame_index], mallets=mallets)
             record = {"frame_index": frame_index, "time_sec": (frame_index - 1) / float(fps)}
             for index, body in enumerate(mallets):
                 if body is None:
                     record[f"mallet_{index}"] = {
                         "active": False,
-                        "location": list(start_positions[index]),
-                        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "location": list(last_pose[index]["location"]),
+                        "quaternion_xyzw": list(last_pose[index]["quaternion_xyzw"]),
                         "linear_velocity": [0.0, 0.0, 0.0],
                         "angular_velocity": [0.0, 0.0, 0.0],
                     }
@@ -357,6 +454,8 @@ def simulate(args: argparse.Namespace) -> dict:
                 peak_speed[index] = max(peak_speed[index], speed)
                 if speed > 0.05:
                     started[index] = True
+                last_pose[index] = {"location": list(pos),
+                                    "quaternion_xyzw": list(quat)}
                 record[f"mallet_{index}"] = {
                     "active": True,
                     "location": list(pos),
@@ -379,41 +478,57 @@ def simulate(args: argparse.Namespace) -> dict:
                     return record["frame_index"]
             return None
 
-        handoff_frame = [first_moving_frame(i) for i in range(3)]
+        handoff_frame = [first_moving_frame(i) for i in range(n_slots)]
+
+        # Relay order is a matter of where the mallets stand, not what their
+        # slot numbers are. With only the original three the two coincide, but
+        # an ADD edit puts the green mallet (slot 3) partway down the line, and
+        # every chain measurement below -- who hands off to whom, who is last
+        # -- would be wrong if it walked the slots in index order. Sorting the
+        # active mallets along the relay direction recovers the true order.
+        order = sorted(
+            (i for i in range(n_slots) if active[i]),
+            key=lambda i: RELAY_DIRECTION * start_positions[i][0],
+        )
+
         speed_after_handoff = []
         retained_fraction = []
-        for index in range(2):
-            frame_index = handoff_frame[index + 1]
+        for striker, receiver in zip(order, order[1:]):
+            frame_index = handoff_frame[receiver]
             if frame_index is None:
                 speed_after_handoff.append(None)
                 retained_fraction.append(None)
                 continue
-            lin = frames[frame_index - 1][f"mallet_{index}"]["linear_velocity"]
+            lin = frames[frame_index - 1][f"mallet_{striker}"]["linear_velocity"]
             speed = math.hypot(lin[0], lin[1])
             speed_after_handoff.append(speed)
-            retained_fraction.append(speed / peak_speed[index] if peak_speed[index] else None)
+            retained_fraction.append(
+                speed / peak_speed[striker] if peak_speed[striker] else None
+            )
 
         final = frames[-1]
         final_speed = [
-            math.hypot(*final[f"mallet_{i}"]["linear_velocity"][:2]) for i in range(3)
+            math.hypot(*final[f"mallet_{i}"]["linear_velocity"][:2]) for i in range(n_slots)
         ]
-        final_x = [final[f"mallet_{i}"]["location"][0] for i in range(3)]
+        final_x = [final[f"mallet_{i}"]["location"][0] for i in range(n_slots)]
         # A clean relay: every mallet still in the scene moved, each striker was
         # left with only a few percent of its speed, and the last one carried
         # most of the push. A removed mallet is not a failure to relay, so it is
         # excluded rather than counted as a mallet that never started.
         relay_completed = all(s for s, a in zip(started, active) if a)
-        exchange_efficiency = peak_speed[2] / push if push else 0.0
+        # How much of the original push reached the far end of the chain --
+        # the last mallet in relay order, which is not necessarily slot 2.
+        exchange_efficiency = (peak_speed[order[-1]] / push) if (push and order) else 0.0
         strikers_stopped = all(
             r is not None and r < 0.20 for r in retained_fraction
         )
         # A striker that rebounds backwards has ended up moving the wrong way:
         # the signature of hitting something heavier than itself.
         rebounded = any(
-            frames[handoff_frame[i + 1] - 1][f"mallet_{i}"]["linear_velocity"][0]
+            frames[handoff_frame[receiver] - 1][f"mallet_{striker}"]["linear_velocity"][0]
             * RELAY_DIRECTION < -0.05
-            for i in range(2)
-            if handoff_frame[i + 1] is not None
+            for striker, receiver in zip(order, order[1:])
+            if handoff_frame[receiver] is not None
         )
 
         return {
@@ -439,19 +554,29 @@ def simulate(args: argparse.Namespace) -> dict:
                 "mallet_restitutions": list(restitutions),
                 "mallet_frictions": list(frictions),
                 "mallet_active": [int(a) for a in active],
+                "mallet_start_x": [pos[0] for pos in start_positions],
+                "mallet_radius": MALLET_RADIUS,
                 "push_speed": push,
                 "surface_friction": float(args.surface_friction),
                 "table_restitution": float(args.table_restitution),
                 # PyBullet multiplies the two bodies' restitutions, so the
                 # number that governs each impact is the product of the pair,
                 # not either mallet's own value.
+                # PyBullet multiplies the pair, and the pairs that actually
+                # meet are consecutive in relay order, not in slot order.
                 "pair_restitution": [
-                    restitutions[0] * restitutions[1],
-                    restitutions[1] * restitutions[2],
+                    restitutions[a] * restitutions[b] for a, b in zip(order, order[1:])
                 ],
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "peak_speed": peak_speed,
+                # Slot indices in the order the chain actually runs, so the
+                # per-pair lists below can be read against the right mallets.
+                "relay_order": order,
                 "handoff_frame": handoff_frame,
                 "speed_after_handoff": speed_after_handoff,
                 "retained_fraction": retained_fraction,

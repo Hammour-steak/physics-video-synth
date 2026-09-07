@@ -38,6 +38,7 @@ MARBLE_GLB = MODELS_DIR / "marble_yellow_ball.glb"
 OUTPUT_STEM = "twin_ramp_collision"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
@@ -819,6 +820,14 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     phys = scenario["physics"]
     render = scenario["render"]
     out = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = phys.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     command = [
         python, str(Path(__file__).with_name("simulate_twin_ramp_collision.py")),
         "--out", str(out),
@@ -856,9 +865,12 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
         "--ball-a-active", str(int(phys.get("active", [1, 1])[0])),
         "--ball-b-active", str(int(phys.get("active", [1, 1])[1])),
     ]
+    if timed_edits:
+        command += ["--timed-edits-json", str(timed_edits_path)]
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
 
     q = data["quality"]
     if q["contact_frame"] is None:
@@ -868,6 +880,14 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     if q["left_track"]:
         print("[WARN] A ball left the plank.")
     return data
+
+
+def removal_frame(frames: list, key: str) -> int | None:
+    """The first frame ball ``key`` is absent on, if it starts out present."""
+    if not frames or not frames[0]["balls"][key]["present"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames
+                 if not f["balls"][key]["present"]), None)
 
 
 def apply_keyframes(ball: bpy.types.Object, frames: list, key: str) -> None:
@@ -884,6 +904,20 @@ def apply_keyframes(ball: bpy.types.Object, frames: list, key: str) -> None:
         for fcurve in ball.animation_data.action.fcurves:
             for keyframe in fcurve.keyframe_points:
                 keyframe.interpolation = "LINEAR"
+    # A ball a timed edit takes away mid-roll leaves the picture at the frame
+    # the simulation stopped reporting it. CONSTANT interpolation so it
+    # vanishes between two frames rather than fading across them.
+    gone_at = removal_frame(frames, key)
+    if gone_at is not None and gone_at > 1:
+        for path in ("hide_viewport", "hide_render"):
+            setattr(ball, path, False)
+            ball.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(ball, path, True)
+            ball.keyframe_insert(data_path=path, frame=gone_at)
+        for fcurve in ball.animation_data.action.fcurves:
+            if fcurve.data_path in ("hide_viewport", "hide_render"):
+                for keyframe in fcurve.keyframe_points:
+                    keyframe.interpolation = "CONSTANT"
 
 
 # --- Scene --------------------------------------------------------------------
@@ -1092,11 +1126,17 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, track, physics: d
         "objects": {
             "ball_a": {
                 "object_name": ball_a.name, "radius": radius, "side": 1,
-                "present": not bool(ball_a.hide_render),
+                "present": bool(physics["frames"][0]["balls"]["a"]["present"]),
+                # The frame it stops being on screen, for a ball a timed edit
+                # takes away partway through.
+                "removed_at_frame": removal_frame(physics["frames"], "a"),
             },
             "ball_b": {
                 "object_name": ball_b.name, "radius": radius, "side": -1,
-                "present": not bool(ball_b.hide_render),
+                "present": bool(physics["frames"][0]["balls"]["b"]["present"]),
+                # The frame it stops being on screen, for a ball a timed edit
+                # takes away partway through.
+                "removed_at_frame": removal_frame(physics["frames"], "b"),
             },
             "track": {
                 "track_z": track.track_z,
@@ -1129,7 +1169,7 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, track, physics: d
         }
         for name, obj in (("ball_a", ball_a), ("ball_b", ball_b)):
             key = name.split("_")[1]
-            if bool(obj.hide_render):
+            if bool(obj.hide_render) or not pf["balls"][key]["present"]:
                 entry[name] = {"present": False}
                 continue
             entry[name] = {

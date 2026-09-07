@@ -40,7 +40,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--marble-active", nargs=2, type=int, default=(1, 1))
     parser.add_argument("--marble-initial-velocity-0", nargs=3, type=float, default=(0.0, 0.0, 0.0))
     parser.add_argument("--marble-initial-velocity-1", nargs=3, type=float, default=(0.0, 0.0, 0.0))
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def load_timed_edits(path: Path | None) -> dict[int, dict]:
+    """Read the schedule into {frame: merged params}."""
+    if path is None:
+        return {}
+    entries = json.loads(Path(path).read_text(encoding="utf-8"))
+    schedule: dict[int, dict] = {}
+    for entry in entries:
+        frame = int(entry["frame"])
+        if frame < 2:
+            raise ValueError(
+                f"Timed edit at frame {frame}: frame 1 is the initial state, "
+                "which is set through the ordinary CLI parameters."
+            )
+        schedule.setdefault(frame, {}).update(dict(entry["params"]))
+    return schedule
 
 
 def sphere_box_gap(
@@ -68,6 +90,69 @@ def sphere_box_gap(
     return -(radius + max(0.0, inside_clearance))
 
 
+def apply_timed_params(
+    client: int,
+    params: dict,
+    *,
+    ball_id: int,
+    marble_ids: list,
+    floor_id: int,
+    ramp_id: int,
+) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    Only the parameters this scene's edit vocabulary can actually produce are
+    handled; an unrecognised key raises rather than being ignored, because a
+    silently dropped edit renders as a video that looks like the baseline and
+    would be indistinguishable from a correct one in the benchmark.
+
+    Removing a body mid-run is a real ``removeBody``: the marble stops
+    colliding with anything from this frame on, which is the whole point of a
+    delete that lands just before the impact.
+    """
+    for key, value in params.items():
+        if key == "marble_active":
+            for idx, active in enumerate(value):
+                if int(active) or marble_ids[idx] is None:
+                    continue
+                p.removeBody(marble_ids[idx], physicsClientId=client)
+                marble_ids[idx] = None
+        elif key == "ball_mass":
+            p.changeDynamics(ball_id, -1, mass=float(value), physicsClientId=client)
+        elif key == "marble_masses":
+            for idx, mass in enumerate(value):
+                if marble_ids[idx] is None:
+                    continue
+                p.changeDynamics(marble_ids[idx], -1, mass=float(mass),
+                                 physicsClientId=client)
+        elif key in ("ball_friction", "ball_rolling_friction", "ball_restitution"):
+            field = {"ball_friction": "lateralFriction",
+                     "ball_rolling_friction": "rollingFriction",
+                     "ball_restitution": "restitution"}[key]
+            p.changeDynamics(ball_id, -1, **{field: float(value)},
+                             physicsClientId=client)
+        elif key in ("marble_friction", "marble_restitution"):
+            field = {"marble_friction": "lateralFriction",
+                     "marble_restitution": "restitution"}[key]
+            for marble_id in marble_ids:
+                if marble_id is None:
+                    continue
+                p.changeDynamics(marble_id, -1, **{field: float(value)},
+                                 physicsClientId=client)
+        elif key == "floor_friction":
+            p.changeDynamics(floor_id, -1, lateralFriction=float(value),
+                             physicsClientId=client)
+        elif key == "ramp_friction":
+            p.changeDynamics(ramp_id, -1, lateralFriction=float(value),
+                             physicsClientId=client)
+        else:
+            raise ValueError(
+                f"Timed edit sets {key!r}, which this scene cannot change "
+                "mid-run. Add it to apply_timed_params or write the edit as a "
+                "whole-clip edit."
+            )
+
+
 def simulate(args: argparse.Namespace) -> dict:
     fps = int(args.fps)
     frame_end = max(2, int(round(float(args.duration_sec) * fps)))
@@ -79,6 +164,13 @@ def simulate(args: argparse.Namespace) -> dict:
     ramp_thickness = float(args.ramp_thickness)
     ramp_width = float(args.ramp_width)
     marble_radius = float(args.marble_radius)
+    timed_edits = load_timed_edits(args.timed_edits_json)
+    latest_edit_frame = max(timed_edits, default=0)
+    if latest_edit_frame > frame_end:
+        raise ValueError(
+            f"Timed edit at frame {latest_edit_frame} is past the end of a "
+            f"{frame_end}-frame clip"
+        )
 
     cos_a = math.cos(ramp_angle)
     sin_a = math.sin(ramp_angle)
@@ -242,11 +334,31 @@ def simulate(args: argparse.Namespace) -> dict:
 
         frames = []
         min_ball_marble_gap = float("inf")
+        # Where each marble was last seen. A marble that is deleted partway
+        # through has a real pose to freeze at; one that was never built keeps
+        # its initial placement, which is what the ground truth recorded before
+        # timed edits existed.
+        marble_last_pose = [
+            {"location": list(ml), "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]}
+            for ml in marble_locations
+        ]
 
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
+
+            # The edit lands at the top of its frame: this frame is the first
+            # one that shows it, and every frame before it is the source video.
+            if frame_index in timed_edits:
+                apply_timed_params(
+                    client,
+                    timed_edits[frame_index],
+                    ball_id=ball_id,
+                    marble_ids=marble_ids,
+                    floor_id=floor_id,
+                    ramp_id=ramp_id,
+                )
 
             ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
             ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
@@ -257,8 +369,8 @@ def simulate(args: argparse.Namespace) -> dict:
                 if ml_id is None:
                     marble_data.append({
                         "active": False,
-                        "location": list(marble_locations[idx]),
-                        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "location": list(marble_last_pose[idx]["location"]),
+                        "quaternion_xyzw": list(marble_last_pose[idx]["quaternion_xyzw"]),
                         "linear_velocity": [0.0, 0.0, 0.0],
                         "angular_velocity": [0.0, 0.0, 0.0],
                         "gap_to_ball": None,
@@ -272,6 +384,8 @@ def simulate(args: argparse.Namespace) -> dict:
                 dist = math.sqrt(dx * dx + dy * dy + dz * dz)
                 gap = dist - radius - marble_radius
                 min_ball_marble_gap = min(min_ball_marble_gap, gap)
+                marble_last_pose[idx] = {"location": list(mpos),
+                                         "quaternion_xyzw": list(mquat)}
                 marble_data.append({
                     "active": True,
                     "location": list(mpos),
@@ -333,6 +447,10 @@ def simulate(args: argparse.Namespace) -> dict:
                     "friction": float(args.floor_friction),
                 },
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "min_ball_marble_gap": min_ball_marble_gap,
             },

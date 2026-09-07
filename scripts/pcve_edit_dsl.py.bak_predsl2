@@ -1,0 +1,683 @@
+"""Scene-agnostic edit DSL for PCVE physics-edit datasets.
+
+Grammar
+-------
+    Edit       := DeleteStmt | SetStmt | AddStmt
+    DeleteStmt := "DELETE" ObjectId
+    SetStmt    := "SET" ObjectId "." Property
+                  "FROM" Value "TO" Value ["HINT" QUOTED_STRING]
+    AddStmt    := "ADD" ObjectId "BETWEEN" ObjectId "AND" ObjectId
+                  "AT" Scalar "RADII" "FROM" ObjectId ["HINT" QUOTED_STRING]
+    Value      := Scalar | "(" Scalar "," Scalar "," Scalar ")"
+
+Three operations: delete an object, set a scalar/vector property from its
+baseline value to a new value, or add an object to the scene.
+
+ADD states the new object's position entirely in relative terms -- no scene
+coordinates appear in the DSL or in the prompts it generates. The position is
+a point on the straight line between two objects already in the scene, and how
+far along that line is given in radii of the object it is measured from:
+
+    ADD yellow_ball BETWEEN cue_ball AND target_ball AT 3 RADII FROM target_ball
+
+reads "put the yellow ball on the cue-ball-to-target-ball line, with its centre
+three target-ball radii from the target ball's centre". Both halves are
+relative: the line is named by two objects rather than an axis, and the
+distance is a multiple of a radius the viewer can see rather than a length in
+metres. The anchor must be one of the two endpoints, and the distance is
+measured centre to centre in units of the *anchor's* radius -- so in a scene
+whose bodies are different sizes, "3 radii from the small marble" is three of
+the small marble's radii.
+
+Per-scene setup
+---------------
+Each scene declares a ``Vocabulary`` that says:
+  * which object ids exist and their zh/en display names;
+  * which properties exist (name, kind, unit, zh/en);
+  * how each (object, property) pair maps to the scene's sim parameter dict
+    (``sim_bindings``), and how DELETE and ADD map to the sim parameter dict
+    (``delete_bindings``, ``add_bindings``);
+  * where each object's centre and radius live in the physics dict
+    (``geometry``), which is what lets ADD resolve a relative position into
+    the coordinates the simulator wants;
+  * the baseline physics dict, used to look up "from" values when generating
+    physics_diff and to preserve neighbouring slots when writing into a list.
+
+Once the vocabulary is defined, the whole pipeline is data-driven:
+    parse(dsl_str, vocab)                -> Edit
+    render(edit, vocab, lang, precise)   -> natural-language prompt
+    to_physics_override(edit, vocab)     -> {sim_param: new_value, ...}
+    baseline_value_for(edit, vocab)      -> baseline value (for physics_diff)
+    add_location(edit, vocab)            -> resolved centre of an ADDed body
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from dataclasses import dataclass, field
+from typing import Any, Union
+
+Scalar = float
+Vector = tuple[float, float, float]
+Value = Union[Scalar, Vector]
+
+
+# ---------------------------------------------------------------- data types
+
+
+@dataclass(frozen=True)
+class DeleteEdit:
+    object_id: str
+
+
+@dataclass(frozen=True)
+class SetEdit:
+    object_id: str
+    property_name: str
+    from_value: Value
+    to_value: Value
+    hint: str | None = None
+
+
+@dataclass(frozen=True)
+class AddEdit:
+    """Put a new body on the line between two existing ones.
+
+    ``anchor_id`` is the endpoint the distance is measured from and must be
+    either ``endpoint_a`` or ``endpoint_b``; ``radii`` is that distance in
+    units of the anchor's own radius, centre to centre.
+    """
+    object_id: str
+    endpoint_a: str
+    endpoint_b: str
+    radii: float
+    anchor_id: str
+    hint: str | None = None
+
+    @property
+    def other_id(self) -> str:
+        """The endpoint the distance is *not* measured from."""
+        return self.endpoint_b if self.anchor_id == self.endpoint_a else self.endpoint_a
+
+
+Edit = Union[DeleteEdit, SetEdit, AddEdit]
+
+
+@dataclass(frozen=True)
+class PropertySpec:
+    kind: str          # "scalar" or "vector"
+    unit: str          # "kg", "m/s", "" ...
+    zh: str
+    en: str
+
+
+@dataclass(frozen=True)
+class SimBinding:
+    """Where writing a SET edit lands in the scene's physics dict.
+
+    ``key`` is the top-level physics parameter name (e.g. ``"ball_mass"``).
+    If ``index`` is not None, the parameter is a list and this binding
+    writes at that index (other slots are copied from ``baseline_physics``).
+    """
+    key: str
+    index: int | None = None
+
+
+@dataclass(frozen=True)
+class CompoundBinding:
+    """One editable property that scales several sim parameters together.
+
+    The scene has multiple physical knobs that behave as a single thing to a
+    viewer -- most commonly lateral friction plus rolling friction, which the
+    edit vocabulary collapses into one ``friction`` property. Editing
+    ``friction`` from ``x`` to ``y`` multiplies every component's baseline by
+    ``y / x``; the value seen in the DSL and in prompts is ``components[0]``'s
+    baseline (the "display" component).
+
+    ``components[0]`` must have a non-zero baseline, or the ratio has no
+    meaning. Non-zero baselines on later components carry their proportional
+    share; a baseline of exactly 0 is left at 0 (scaling nothing by anything
+    is nothing), which is the intended behaviour for a body that carries no
+    rolling friction of its own.
+    """
+    components: tuple[SimBinding, ...]
+
+
+@dataclass(frozen=True)
+class DeleteBinding:
+    """Where writing a DELETE edit lands in the scene's physics dict.
+
+    The physics parameter at ``key`` is a list; the entry at ``index`` is
+    set to ``value_when_removed`` (usually 0). Baseline is inspected to fill
+    the other slots.
+    """
+    key: str
+    index: int
+    value_when_removed: Any = 0
+
+
+@dataclass(frozen=True)
+class GeometryAnchor:
+    """Where an object's baseline centre and radius live in the physics dict.
+
+    ADD places the new body on the line between two objects already in the
+    scene, so the vocabulary has to say where those objects *are*.
+    ``location_key`` names a 3-vector physics parameter (or, with
+    ``location_index``, one entry of a list of them); ``radius_key`` names the
+    scalar the scene keeps that object's radius in. Bodies that share one
+    radius parameter -- a rack of identical billiard balls -- all point at the
+    same key.
+
+    Centres are read in whatever frame the scene's own parameters use, and the
+    resolved point is written back in that same frame. For pool that is table
+    coordinates with z measured up from the felt, which is why interpolating
+    all three components is exactly "on the line".
+    """
+    location_key: str
+    radius_key: str
+    location_index: int | None = None
+    radius_index: int | None = None
+
+
+@dataclass(frozen=True)
+class AddBinding:
+    """Where writing an ADD edit lands in the scene's physics dict.
+
+    DELETE's mirror image. The body must already exist in the scene's
+    parameter set as a slot that is *off* at baseline: the physics parameter
+    at ``presence_key`` is a list whose entry at ``presence_index`` reads 0 in
+    ``baseline_physics``, and ADD sets it to ``value_when_present``. The centre
+    the edit resolves to is written at ``location_key``.
+
+    ``defaults`` carries any other physics keys that have to come on with the
+    body -- its mass, its friction, and so on, for scenes that keep those in
+    separate parameters. Each pair is written verbatim.
+    """
+    presence_key: str
+    presence_index: int
+    location_key: str
+    value_when_present: Any = 1
+    location_index: int | None = None
+    defaults: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class Vocabulary:
+    objects: dict[str, dict[str, str]]                    # obj_id -> {zh, en}
+    properties: dict[str, PropertySpec]                   # prop_name -> spec
+    sim_bindings: dict[tuple[str, str], SimBinding | CompoundBinding]  # (obj, prop) -> where
+    delete_bindings: dict[str, DeleteBinding]             # obj -> where
+    baseline_physics: dict[str, Any]
+    # Both default to empty so every scene written before ADD existed keeps
+    # constructing unchanged; a scene without them simply has no ADD edits.
+    geometry: dict[str, GeometryAnchor] = field(default_factory=dict)
+    add_bindings: dict[str, AddBinding] = field(default_factory=dict)
+
+    def check_object(self, name: str) -> None:
+        if name not in self.objects:
+            raise ValueError(f"Unknown object: {name!r}. Allowed: {sorted(self.objects)}")
+
+    def check_geometry(self, name: str) -> None:
+        self.check_object(name)
+        if name not in self.geometry:
+            raise ValueError(
+                f"Object {name!r} has no geometry anchor, so it cannot be used "
+                f"to position an ADD. Allowed: {sorted(self.geometry)}"
+            )
+
+    def check_property(self, name: str) -> None:
+        if name not in self.properties:
+            raise ValueError(f"Unknown property: {name!r}. Allowed: {sorted(self.properties)}")
+
+
+# --------------------------------------------------------------------- parse
+
+_VEC = re.compile(r"\(\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)")
+_SET = re.compile(
+    r"^SET\s+(\w+)\.(\w+)\s+FROM\s+(\S.*?)\s+TO\s+(\S.*?)"
+    r"(?:\s+HINT\s+\"([^\"]*)\")?\s*$"
+)
+_DEL = re.compile(r"^DELETE\s+(\w+)\s*$")
+_ADD = re.compile(
+    r"^ADD\s+(\w+)\s+BETWEEN\s+(\w+)\s+AND\s+(\w+)"
+    r"\s+AT\s+([-\d.eE+]+)\s+RADII\s+FROM\s+(\w+)"
+    r"(?:\s+HINT\s+\"([^\"]*)\")?\s*$"
+)
+
+
+def _parse_value(s: str) -> Value:
+    s = s.strip()
+    m = _VEC.fullmatch(s)
+    if m:
+        return (float(m.group(1)), float(m.group(2)), float(m.group(3)))
+    return float(s)
+
+
+def _check_kind(prop: str, v: Value, kind: str) -> None:
+    if kind == "scalar" and not isinstance(v, float):
+        raise ValueError(f"{prop!r} expects scalar, got {v!r}")
+    if kind == "vector" and not (isinstance(v, tuple) and len(v) == 3):
+        raise ValueError(f"{prop!r} expects 3-vector, got {v!r}")
+
+
+def parse(text: str, vocab: Vocabulary | None = None) -> Edit:
+    text = text.strip()
+    m = _DEL.match(text)
+    if m:
+        obj = m.group(1)
+        if vocab:
+            vocab.check_object(obj)
+            if obj not in vocab.delete_bindings:
+                raise ValueError(f"Object {obj!r} cannot be deleted in this scene")
+        return DeleteEdit(object_id=obj)
+    m = _ADD.match(text)
+    if m:
+        obj, end_a, end_b, radii_s, anchor, hint = m.groups()
+        if end_a == end_b:
+            raise ValueError(
+                f"ADD needs two different endpoints to define a line, got "
+                f"{end_a!r} twice"
+            )
+        if anchor not in (end_a, end_b):
+            raise ValueError(
+                f"ADD measures from one of its own endpoints; {anchor!r} is "
+                f"neither {end_a!r} nor {end_b!r}"
+            )
+        edit = AddEdit(obj, end_a, end_b, float(radii_s), anchor, hint or None)
+        if vocab:
+            vocab.check_object(obj)
+            if obj not in vocab.add_bindings:
+                raise ValueError(f"Object {obj!r} cannot be added in this scene")
+            vocab.check_geometry(end_a)
+            vocab.check_geometry(end_b)
+            vocab.check_geometry(obj)
+            # Resolving now is the point: an ADD that would drop the new body
+            # inside one of its own endpoints is a bad edit, and this is the
+            # cheapest place to find that out.
+            add_location(edit, vocab)
+        return edit
+    m = _SET.match(text)
+    if m:
+        obj, prop, from_s, to_s, hint = m.groups()
+        from_v, to_v = _parse_value(from_s), _parse_value(to_s)
+        if vocab:
+            vocab.check_object(obj)
+            vocab.check_property(prop)
+            spec = vocab.properties[prop]
+            _check_kind(prop, from_v, spec.kind)
+            _check_kind(prop, to_v, spec.kind)
+            if (obj, prop) not in vocab.sim_bindings:
+                raise ValueError(f"Property {prop!r} is not defined on {obj!r}")
+        return SetEdit(obj, prop, from_v, to_v, hint or None)
+    raise ValueError(f"Not a valid edit: {text!r}")
+
+
+# ------------------------------------------------------------------ serialize
+
+
+def _fmt_num(x: float) -> str:
+    return f"{x:g}"
+
+
+def _fmt_value(v: Value) -> str:
+    if isinstance(v, tuple):
+        return "(" + ", ".join(_fmt_num(c) for c in v) + ")"
+    return _fmt_num(v)
+
+
+def serialize(edit: Edit) -> str:
+    if isinstance(edit, DeleteEdit):
+        return f"DELETE {edit.object_id}"
+    if isinstance(edit, AddEdit):
+        parts = [
+            f"ADD {edit.object_id}",
+            f"BETWEEN {edit.endpoint_a} AND {edit.endpoint_b}",
+            f"AT {_fmt_num(edit.radii)} RADII FROM {edit.anchor_id}",
+        ]
+        if edit.hint:
+            parts.append(f'HINT "{edit.hint}"')
+        return " ".join(parts)
+    parts = [
+        f"SET {edit.object_id}.{edit.property_name}",
+        f"FROM {_fmt_value(edit.from_value)}",
+        f"TO {_fmt_value(edit.to_value)}",
+    ]
+    if edit.hint:
+        parts.append(f'HINT "{edit.hint}"')
+    return " ".join(parts)
+
+
+# ------------------------------------------------ relative geometry (for ADD)
+
+
+def _anchor_centre(object_id: str, vocab: Vocabulary) -> Vector:
+    anchor = vocab.geometry[object_id]
+    value = vocab.baseline_physics[anchor.location_key]
+    if anchor.location_index is not None:
+        value = value[anchor.location_index]
+    if len(value) != 3:
+        raise ValueError(
+            f"Geometry for {object_id!r} points at {anchor.location_key!r}, "
+            f"which is not a 3-vector: {value!r}"
+        )
+    return (float(value[0]), float(value[1]), float(value[2]))
+
+
+def _anchor_radius(object_id: str, vocab: Vocabulary) -> float:
+    anchor = vocab.geometry[object_id]
+    value = vocab.baseline_physics[anchor.radius_key]
+    if anchor.radius_index is not None:
+        value = value[anchor.radius_index]
+    radius = float(value)
+    if radius <= 0.0:
+        raise ValueError(
+            f"Geometry for {object_id!r} reads radius {radius} from "
+            f"{anchor.radius_key!r}; a radius has to be positive"
+        )
+    return radius
+
+
+def add_fraction(edit: AddEdit, vocab: Vocabulary) -> float:
+    """How far along the endpoint_a -> endpoint_b segment the new body sits.
+
+    0 puts it on top of ``endpoint_a`` and 1 on top of ``endpoint_b``. This is
+    what the vague prompt reads to say "closer to the cue ball" without ever
+    naming a number.
+    """
+    a = _anchor_centre(edit.endpoint_a, vocab)
+    b = _anchor_centre(edit.endpoint_b, vocab)
+    span = math.dist(a, b)
+    if span < 1e-9:
+        raise ValueError(
+            f"{edit.endpoint_a!r} and {edit.endpoint_b!r} are at the same "
+            "place, so there is no line between them"
+        )
+    offset = edit.radii * _anchor_radius(edit.anchor_id, vocab)
+    t = offset / span
+    return t if edit.anchor_id == edit.endpoint_a else 1.0 - t
+
+
+def anchor_centre(object_id: str, vocab: Vocabulary) -> Vector:
+    """Public read of an object's baseline centre, in the scene's own frame.
+
+    The evaluator needs the two endpoints of an ADD's line in scene
+    coordinates: identifying them by name downstream does not work, because
+    the DSL's object ids and the render's mesh names are different vocabularies
+    (`red_stone` is `stone_0` in curling's ground truth). Coordinates project
+    through the camera without any name matching at all.
+    """
+    vocab.check_geometry(object_id)
+    return _anchor_centre(object_id, vocab)
+
+
+def add_location(edit: AddEdit, vocab: Vocabulary) -> Vector:
+    """Resolve an ADD's relative position into the scene's own coordinates.
+
+    The new centre is ``radii * r_anchor`` from the anchor's centre, along the
+    line towards the other endpoint. Both endpoints are checked for room: an
+    edit that would seat the new body inside one of them is rejected here
+    rather than handed to the simulator, which would answer with an explosive
+    overlap resolution instead of an error.
+    """
+    vocab.check_geometry(edit.endpoint_a)
+    vocab.check_geometry(edit.endpoint_b)
+    vocab.check_geometry(edit.object_id)
+
+    anchor_centre = _anchor_centre(edit.anchor_id, vocab)
+    other_centre = _anchor_centre(edit.other_id, vocab)
+    span = math.dist(anchor_centre, other_centre)
+    if span < 1e-9:
+        raise ValueError(
+            f"{edit.endpoint_a!r} and {edit.endpoint_b!r} are at the same "
+            "place, so there is no line between them"
+        )
+
+    r_anchor = _anchor_radius(edit.anchor_id, vocab)
+    r_other = _anchor_radius(edit.other_id, vocab)
+    r_new = _anchor_radius(edit.object_id, vocab)
+    offset = edit.radii * r_anchor
+
+    if offset < r_anchor + r_new:
+        raise ValueError(
+            f"ADD {edit.object_id} at {edit.radii:g} radii from "
+            f"{edit.anchor_id} puts the two bodies {offset:.4f} m apart "
+            f"centre to centre, but they need at least "
+            f"{r_anchor + r_new:.4f} m not to overlap "
+            f"({(r_anchor + r_new) / r_anchor:.2f} radii)"
+        )
+    if span - offset < r_other + r_new:
+        raise ValueError(
+            f"ADD {edit.object_id} at {edit.radii:g} radii from "
+            f"{edit.anchor_id} leaves only {span - offset:.4f} m to "
+            f"{edit.other_id}, which needs at least {r_other + r_new:.4f} m "
+            f"(the whole line is {span / r_anchor:.2f} radii long)"
+        )
+
+    t = offset / span
+    return tuple(
+        a + t * (b - a) for a, b in zip(anchor_centre, other_centre)
+    )  # type: ignore[return-value]
+
+
+# ------------------------------------------------------ physics adapter (generic)
+
+
+def to_physics_override(edit: Edit, vocab: Vocabulary) -> dict[str, Any]:
+    """Return the physics sub-dict to merge onto the scene's baseline."""
+    if isinstance(edit, DeleteEdit):
+        vocab.check_object(edit.object_id)
+        db = vocab.delete_bindings[edit.object_id]
+        current = list(vocab.baseline_physics[db.key])
+        current[db.index] = db.value_when_removed
+        return {db.key: current}
+
+    if isinstance(edit, AddEdit):
+        vocab.check_object(edit.object_id)
+        ab = vocab.add_bindings[edit.object_id]
+        out: dict[str, Any] = dict(ab.defaults)
+        presence = list(vocab.baseline_physics[ab.presence_key])
+        presence[ab.presence_index] = ab.value_when_present
+        out[ab.presence_key] = presence
+        location = list(add_location(edit, vocab))
+        if ab.location_index is None:
+            out[ab.location_key] = location
+        else:
+            current = list(vocab.baseline_physics[ab.location_key])
+            current[ab.location_index] = location
+            out[ab.location_key] = current
+        return out
+
+    vocab.check_object(edit.object_id)
+    vocab.check_property(edit.property_name)
+    sb = vocab.sim_bindings[(edit.object_id, edit.property_name)]
+    if isinstance(sb, CompoundBinding):
+        return _compound_override(sb, edit, vocab)
+    if sb.index is None:
+        return {sb.key: edit.to_value}
+    current = list(vocab.baseline_physics[sb.key])
+    current[sb.index] = edit.to_value
+    return {sb.key: current}
+
+
+def _read_baseline(component: SimBinding, vocab: Vocabulary) -> Any:
+    val = vocab.baseline_physics[component.key]
+    if component.index is not None:
+        val = val[component.index]
+    return val
+
+
+def _write_override(
+    component: SimBinding, new_value: Any, vocab: Vocabulary, out: dict[str, Any]
+) -> None:
+    if component.index is None:
+        out[component.key] = new_value
+        return
+    current = out.get(component.key)
+    if current is None:
+        current = list(vocab.baseline_physics[component.key])
+    current[component.index] = new_value
+    out[component.key] = current
+
+
+def _compound_override(
+    binding: CompoundBinding, edit: SetEdit, vocab: Vocabulary
+) -> dict[str, Any]:
+    if not binding.components:
+        raise ValueError("CompoundBinding requires at least one component")
+    display_baseline = float(_read_baseline(binding.components[0], vocab))
+    if display_baseline == 0.0:
+        raise ValueError(
+            f"CompoundBinding display component {binding.components[0].key!r} has "
+            "a zero baseline; the scaling ratio is undefined"
+        )
+    from_v = float(edit.from_value)
+    to_v = float(edit.to_value)
+    if from_v == 0.0:
+        raise ValueError(
+            f"Edit on {edit.object_id}.{edit.property_name} has FROM 0; cannot "
+            "form a scaling ratio"
+        )
+    ratio = to_v / from_v
+    out: dict[str, Any] = {}
+    for component in binding.components:
+        baseline = float(_read_baseline(component, vocab))
+        # A zero baseline stays zero: 0 * anything is 0, and this is how a body
+        # with no rolling friction of its own remains a pure lateral edit.
+        _write_override(component, baseline * ratio, vocab, out)
+    return out
+
+
+def baseline_value_for(edit: Edit, vocab: Vocabulary) -> Any:
+    """Baseline value of the property this edit targets (for physics_diff)."""
+    if isinstance(edit, DeleteEdit):
+        return "present"
+    if isinstance(edit, AddEdit):
+        return "absent"
+    sb = vocab.sim_bindings[(edit.object_id, edit.property_name)]
+    if isinstance(sb, CompoundBinding):
+        return _read_baseline(sb.components[0], vocab)
+    val = vocab.baseline_physics[sb.key]
+    if sb.index is not None:
+        val = val[sb.index]
+    return val
+
+
+# ------------------------------------------------------------- NL generation
+
+
+def _direction(from_v: Value, to_v: Value) -> str:
+    def mag(v: Value) -> float:
+        return math.sqrt(sum(c * c for c in v)) if isinstance(v, tuple) else abs(v)
+    a, b = mag(from_v), mag(to_v)
+    if a < 1e-12 <= b:
+        return "activate"
+    if b < 1e-12 <= a:
+        return "deactivate"
+    if b > a:
+        return "increase"
+    if b < a:
+        return "decrease"
+    return "change"
+
+
+_VERBS = {
+    "increase": {"zh": "调大", "en": "increase"},
+    "decrease": {"zh": "调小", "en": "decrease"},
+    "change":   {"zh": "改动", "en": "change"},
+}
+
+
+def _unit(unit: str) -> str:
+    return f" {unit}" if unit else ""
+
+
+def _render_add(edit: AddEdit, vocab: Vocabulary, lang: str, precise: bool) -> str:
+    vocab.check_object(edit.object_id)
+    new = vocab.objects[edit.object_id][lang]
+    a = vocab.objects[edit.endpoint_a][lang]
+    b = vocab.objects[edit.endpoint_b][lang]
+    anchor = vocab.objects[edit.anchor_id][lang]
+    other = vocab.objects[edit.other_id][lang]
+    hint = edit.hint or ""
+
+    if precise:
+        k = _fmt_num(edit.radii)
+        if lang == "zh":
+            text = (f"在{a}和{b}的连线上放一个{new},"
+                    f"它的中心距{anchor}中心 {k} 个{anchor}半径。")
+        else:
+            text = (f"Place {new} on the line between {a} and {b}, with its "
+                    f"centre {k} times {anchor}'s radius from {anchor}'s centre.")
+        if hint:
+            text = text[:-1] + {"zh": f"({hint})。", "en": f" ({hint})."}[lang]
+        return text
+
+    # Vague: keep the position relative but drop the number. A third of the
+    # way is the cutoff -- nearer than that and the eye reads the new body as
+    # sitting beside one of the endpoints rather than between them.
+    fraction = add_fraction(edit, vocab)
+    from_anchor = fraction if edit.anchor_id == edit.endpoint_a else 1.0 - fraction
+    if from_anchor < 1.0 / 3.0:
+        where = {"zh": f"靠近{anchor}的地方", "en": f"closer to {anchor}"}[lang]
+    elif from_anchor > 2.0 / 3.0:
+        where = {"zh": f"靠近{other}的地方", "en": f"closer to {other}"}[lang]
+    else:
+        where = {"zh": "大致中间的位置", "en": "about midway between them"}[lang]
+    if lang == "zh":
+        text = f"在{a}和{b}的连线上、{where},放一个{new}。"
+    else:
+        text = f"Place {new} on the line between {a} and {b}, {where}."
+    if hint:
+        text = text[:-1] + {"zh": f"({hint})。", "en": f" ({hint})."}[lang]
+    return text
+
+
+def render(edit: Edit, vocab: Vocabulary, *, lang: str = "zh", precise: bool) -> str:
+    if isinstance(edit, DeleteEdit):
+        vocab.check_object(edit.object_id)
+        name = vocab.objects[edit.object_id][lang]
+        return {"zh": f"把{name}从场景中删除。",
+                "en": f"Remove {name} from the scene."}[lang]
+
+    if isinstance(edit, AddEdit):
+        return _render_add(edit, vocab, lang, precise)
+
+    vocab.check_object(edit.object_id)
+    vocab.check_property(edit.property_name)
+    spec = vocab.properties[edit.property_name]
+    obj = vocab.objects[edit.object_id][lang]
+    prop = spec.zh if lang == "zh" else spec.en
+    unit = _unit(spec.unit)
+    hint = edit.hint or ""
+
+    if precise:
+        fv = _fmt_value(edit.from_value) + unit
+        tv = _fmt_value(edit.to_value) + unit
+        if lang == "zh":
+            return f"把{obj}的{prop}从 {fv} 改成 {tv}。"
+        return f"Change {obj}'s {prop} from {fv} to {tv}."
+
+    dir_ = _direction(edit.from_value, edit.to_value)
+    if dir_ == "activate":
+        hint_zh = f",方向{hint}" if hint else ""
+        hint_en = f" ({hint})" if hint else ""
+        return {"zh": f"给{obj}一个{prop}{hint_zh}。",
+                "en": f"Give {obj} an {prop}{hint_en}."}[lang]
+    if dir_ == "deactivate":
+        return {"zh": f"把{obj}的{prop}清零。",
+                "en": f"Set {obj}'s {prop} to zero."}[lang]
+    verb = _VERBS[dir_][lang]
+    if lang == "zh":
+        return f"把{obj}的{prop}{verb}一些。"
+    return f"{verb.capitalize()} {obj}'s {prop}."
+
+
+def make_prompts(edit: Edit, vocab: Vocabulary) -> dict[str, dict[str, str]]:
+    """Convenience: precise + vague, in zh + en."""
+    return {
+        "vague":        {"zh": render(edit, vocab, lang="zh", precise=False),
+                         "en": render(edit, vocab, lang="en", precise=False)},
+        "quantitative": {"zh": render(edit, vocab, lang="zh", precise=True),
+                         "en": render(edit, vocab, lang="en", precise=True)},
+    }

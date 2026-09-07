@@ -25,6 +25,7 @@ DIRECT_MP4_NAME = f"{OUTPUT_STEM}.mp4"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
 # Geometry matches simulate_car_ramp_climb.py.
@@ -828,6 +829,14 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
 
     script_path = Path(__file__).with_name("simulate_car_ramp_climb.py")
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     subprocess.run(
         [
             python,
@@ -858,11 +867,13 @@ def run_physics_simulation(args: argparse.Namespace, scenario: dict[str, object]
             str(float(physics["launch_speed"])),
             "--gravity-z",
             str(float(physics["gravity"][2])),
-        ],
+        ]
+        + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
         check=True,
     )
     records = json.loads(physics_path.read_text(encoding="utf-8"))
     physics_path.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return records
 
 

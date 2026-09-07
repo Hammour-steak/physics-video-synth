@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import pybullet as p
+
+# The shared timed-edit plumbing lives one directory up, next to the DSL.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pcve_timed_edits as timed  # noqa: E402
 
 
 # Scene geometry matches render_bowling.py so the PyBullet trajectory can be
@@ -79,7 +84,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--floor-z", type=float, default=FLOOR_Z)
     parser.add_argument("--scene-offset-x", type=float, default=0.0)
     parser.add_argument("--scene-offset-y", type=float, default=0.0)
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def apply_timed_params(client: int, params: dict, *, ball, pins: list) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    The pins are one editable object in this scene's vocabulary, so a pin
+    parameter is written to every pin. Anything the vocabulary cannot produce
+    raises: an edit that is silently dropped renders as a video that looks like
+    the baseline.
+    """
+    ball_fields = {"ball_mass": "mass", "ball_friction": "lateralFriction",
+                   "ball_rolling_friction": "rollingFriction",
+                   "ball_restitution": "restitution"}
+    pin_fields = {"pin_mass": "mass", "pin_friction": "lateralFriction",
+                  "pin_restitution": "restitution"}
+    for key, value in params.items():
+        if key in ball_fields:
+            timed.set_one(p, client, ball, ball_fields[key], value)
+        elif key in pin_fields:
+            timed.set_dynamics(p, client, pins, [value] * len(pins),
+                               pin_fields[key])
+        else:
+            raise timed.unknown_param(key)
 
 
 def simulate(args: argparse.Namespace) -> dict:
@@ -218,10 +251,19 @@ def simulate(args: argparse.Namespace) -> dict:
         min_ball_floor_gap = float("inf")
         min_ball_pin_gap = float("inf")
 
+        timed_edits = timed.load_timed_edits(args.timed_edits_json)
+        timed.check_horizon(timed_edits, frame_end)
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
+
+            # The edit lands at the top of its frame: this frame is the
+            # first one that shows it, and every frame before it is the
+            # source video.
+            if frame_index in timed_edits:
+                apply_timed_params(client, timed_edits[frame_index],
+                                   ball=ball_id, pins=pin_ids)
 
             ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
             ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
@@ -302,6 +344,10 @@ def simulate(args: argparse.Namespace) -> dict:
                     "y": offset_y,
                 },
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "min_ball_floor_gap": min_ball_floor_gap,
                 "min_ball_pin_gap": min_ball_pin_gap,

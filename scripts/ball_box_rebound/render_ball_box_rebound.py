@@ -27,6 +27,7 @@ PROPS_COLLIDER_OBJ = COLLISION_DIR / "toy_box_props.obj"
 OUTPUT_STEM = "ball_box_rebound"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
@@ -527,10 +528,23 @@ def extract_ball(object_name: str, diameter: float, new_name: str) -> bpy.types.
     return ball
 
 
+def removal_frame(frames: list, key: str) -> int | None:
+    """The first frame ``key`` is missing from, if it starts out present.
+
+    A ball the simulator removed mid-run simply stops appearing in the record
+    -- the same shape a whole-clip delete produces, only starting later.
+    """
+    if not frames or key not in frames[0]:
+        return None
+    return next((int(f["frame_index"]) for f in frames if key not in f), None)
+
+
 def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
     obj.rotation_mode = "QUATERNION"
     for fr in frames:
-        d = fr[key]
+        d = fr.get(key)
+        if d is None:
+            continue
         obj.location = d["location"]
         q = d["quaternion_xyzw"]
         obj.rotation_quaternion = (q[3], q[0], q[1], q[2])
@@ -540,6 +554,20 @@ def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
         for fc in obj.animation_data.action.fcurves:
             for k in fc.keyframe_points:
                 k.interpolation = "LINEAR"
+    # A ball a timed edit takes away mid-roll leaves the picture at the frame
+    # the simulation stopped reporting it. CONSTANT interpolation so it
+    # vanishes between two frames rather than fading across them.
+    gone_at = removal_frame(frames, key)
+    if gone_at is not None and gone_at > 1:
+        for path in ("hide_viewport", "hide_render"):
+            setattr(obj, path, False)
+            obj.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(obj, path, True)
+            obj.keyframe_insert(data_path=path, frame=gone_at)
+        for fc in obj.animation_data.action.fcurves:
+            if fc.data_path in ("hide_viewport", "hide_render"):
+                for k in fc.keyframe_points:
+                    k.interpolation = "CONSTANT"
 
 
 # --- Physics ------------------------------------------------------------------
@@ -566,6 +594,14 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
 
     ph = scenario["physics"]
     out = args.out_dir / PHYSICS_TEMP_NAME
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = ph.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     command = [
         python, str(Path(__file__).with_name("simulate_ball_box_rebound.py")),
         "--out", str(out),
@@ -603,9 +639,12 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     if not ball_b_present:
         command += ["--disable-ball-b"]
 
+    if timed_edits:
+        command += ["--timed-edits-json", str(timed_edits_path)]
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
 
     q = data["quality"]
     if not q["hit_chest"]:
@@ -763,6 +802,9 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                 {"present": False, "object_name": None}
                 if ball_b is None
                 else {"present": True, "object_name": ball_b.name,
+                      # The frame it stops being on screen, for a ball a timed
+                      # edit takes away partway through.
+                      "removed_at_frame": removal_frame(physics["frames"], "ball_b"),
                       "radius": physics["objects"]["ball_b"]["radius"]}
             ),
             "chest_face": {"slope": CHEST_FACE_SLOPE, "x_range": list(CHEST_FACE_X)},
@@ -782,7 +824,10 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
         pf = by_frame[frame]
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps),
                  "camera_matrix_world": [[float(v) for v in row] for row in camera.matrix_world]}
-        present = [("ball_a", ball_a)] + ([("ball_b", ball_b)] if ball_b is not None else [])
+        # Presence is per frame now: a timed delete leaves the ball in the
+        # record up to its frame and out of it afterwards.
+        b_here = ball_b is not None and "ball_b" in pf
+        present = [("ball_a", ball_a)] + ([("ball_b", ball_b)] if b_here else [])
         for key, obj in present:
             entry[key] = {
                 "matrix_world": [[float(v) for v in row] for row in obj.matrix_world],
@@ -791,7 +836,7 @@ def export_ground_truth(out_dir: Path, ball_a, ball_b, camera, physics: dict,
                 "speed": pf[key]["speed"],
             }
         entry["ball_a"]["phase"] = pf["ball_a"]["phase"]
-        if ball_b is None:
+        if not b_here:
             entry["ball_b"] = {"present": False}
         else:
             entry["ball_b"]["present"] = True

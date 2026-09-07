@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import pybullet as p
+
+# The shared timed-edit plumbing lives one directory up, next to the DSL.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pcve_timed_edits as timed  # noqa: E402
 
 
 # A three-object sliding chain on a dining tabletop: a cola can is given a
@@ -83,7 +88,35 @@ def parse_args() -> argparse.Namespace:
         help="Initial +Y speed of the can in m/s. Overrides --launch-speed when given. "
         "Only the can has a non-zero baseline velocity.",
     )
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def apply_timed_params(client: int, params: dict, *, bodies: dict, order) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    ``bodies`` maps name -> body id, in ``order``; it is edited in place when
+    one is removed. Anything this scene's edit vocabulary cannot produce
+    raises: an edit that is silently dropped renders as a video that looks like
+    the baseline.
+    """
+    fields = {"object_masses": "mass", "object_frictions": "lateralFriction",
+              "object_restitutions": "restitution"}
+    for key, value in params.items():
+        if key == "object_active":
+            slots = [bodies[name] for name in order]
+            timed.remove_bodies(p, client, slots, value)
+            for name, body in zip(order, slots):
+                bodies[name] = body
+        elif key in fields:
+            slots = [bodies[name] for name in order]
+            timed.set_dynamics(p, client, slots, value, fields[key])
+        else:
+            raise timed.unknown_param(key)
 
 
 def up_axis_z(quat_xyzw) -> float:
@@ -185,26 +218,43 @@ def simulate(args: argparse.Namespace) -> dict:
             )
 
         start_y = {name: SPECS[name]["start_y"] for name in ORDER}
+        timed_edits = timed.load_timed_edits(args.timed_edits_json)
+        timed.check_horizon(timed_edits, frame_end)
+        # Where each object was last seen. One removed partway through has a
+        # real pose to freeze at; one that was never built keeps its start
+        # placement, which is what the output carried before timed edits.
+        last_pose = {
+            name: {"location": [CHAIN_X, start_y[name], start_z[name]],
+                   "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0]}
+            for name in ORDER
+        }
         frames = []
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
+            # The edit lands at the top of its frame: this frame is the first
+            # one that shows it, and every frame before it is the source video.
+            if frame_index in timed_edits:
+                apply_timed_params(client, timed_edits[frame_index],
+                                   bodies=bodies, order=ORDER)
+
             entry = {"frame_index": frame_index, "time_sec": (frame_index - 1) / float(fps), "objects": {}}
             for name in ORDER:
                 body = bodies[name]
                 if body is None:
-                    z = start_z[name]
                     entry["objects"][name] = {
                         "active": False,
-                        "location": [CHAIN_X, start_y[name], z],
-                        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "location": list(last_pose[name]["location"]),
+                        "quaternion_xyzw": list(last_pose[name]["quaternion_xyzw"]),
                         "linear_velocity": [0.0, 0.0, 0.0],
                         "angular_velocity": [0.0, 0.0, 0.0],
                     }
                     continue
                 pos, quat = p.getBasePositionAndOrientation(body, physicsClientId=client)
                 lin, ang = p.getBaseVelocity(body, physicsClientId=client)
+                last_pose[name] = {"location": list(pos),
+                                   "quaternion_xyzw": list(quat)}
                 entry["objects"][name] = {
                     "active": True,
                     "location": list(pos),
@@ -249,6 +299,10 @@ def simulate(args: argparse.Namespace) -> dict:
                 "object_restitutions": list(restitutions),
                 "object_active": [int(a) for a in active],
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {**quality, "chain_ok": chain_ok, "start_z": start_z, "start_y": start_y},
             "frames": frames,
         }

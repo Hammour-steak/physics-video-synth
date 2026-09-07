@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import pybullet as p
+
+# The shared timed-edit plumbing lives one directory up, next to the DSL.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pcve_timed_edits as timed  # noqa: E402
 
 
 # A tennis ball is rolled west across a round coffee table, runs off the edge,
@@ -281,7 +286,40 @@ def parse_args() -> argparse.Namespace:
         "It also puts the whole shot across the frame rather than into the lens, "
         "which is the only way a 67 mm ball reads at this distance.",
     )
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def apply_timed_params(client: int, params: dict, *, bodies: dict) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    ``bodies`` maps "ball_a"/"ball_b" to body id and is edited in place when
+    one is removed. Anything this scene's edit vocabulary cannot produce
+    raises: an edit that is silently dropped renders as a video that looks like
+    the baseline.
+    """
+    fields = {"mass": "mass", "friction": "lateralFriction",
+              "rolling_friction": "rollingFriction",
+              "restitution": "restitution"}
+    for key, value in params.items():
+        if key in ("active", "ball_b_active"):
+            # The presence list is [ball_a, ball_b]; only ball_b can go.
+            flags = value if isinstance(value, (list, tuple)) else [value]
+            slot = [bodies["ball_b"]]
+            timed.remove_bodies(p, client, slot, flags[-1:])
+            bodies["ball_b"] = slot[0]
+            continue
+        for name in ("ball_a", "ball_b"):
+            suffix = key[len(name) + 1:] if key.startswith(name + "_") else None
+            if suffix in fields:
+                timed.set_one(p, client, bodies[name], fields[suffix], value)
+                break
+        else:
+            raise timed.unknown_param(key)
 
 
 def add_box(client: int, half_extents, centre, friction: float, restitution: float,
@@ -634,6 +672,8 @@ def simulate(args: argparse.Namespace) -> dict:
         # a half frames long. Timing the lip and the impact to the frame would
         # put a 30 mm error into the flight check on its own.
         sim_time = 0.0
+        timed_edits = timed.load_timed_edits(args.timed_edits_json)
+        timed.check_horizon(timed_edits, frame_end)
 
         for frame_index in range(1, frame_end + 1):
             for _ in range(substeps if frame_index > 1 else 0):
@@ -713,6 +753,15 @@ def simulate(args: argparse.Namespace) -> dict:
 
             record = {"frame_index": frame_index,
                       "time_sec": (frame_index - 1) / float(fps)}
+            # The edit lands at the top of its frame: this frame is the first
+            # one that shows it, and every frame before it is the source video.
+            # A removed ball simply stops appearing in the record, which is the
+            # same shape a whole-clip delete produces.
+            if frame_index in timed_edits:
+                bodies = {"ball_a": ball_a, "ball_b": ball_b}
+                apply_timed_params(client, timed_edits[frame_index], bodies=bodies)
+                ball_a, ball_b = bodies["ball_a"], bodies["ball_b"]
+
             spin_now = {}
             for name, body, radius in (("ball_a", ball_a, r_a),
                                        ("ball_b", ball_b, r_b)):
@@ -890,6 +939,10 @@ def simulate(args: argparse.Namespace) -> dict:
                 "centre_separation": r_a + r_b,
                 "predicted": impact,
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "left_table": lip is not None,
                 "lip_frame": None if lip is None else lip["frame"],

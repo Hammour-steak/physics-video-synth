@@ -117,10 +117,17 @@ DELETE_BINDINGS = {
 }
 
 
+# Frames in this suite's videos: build_pcve_ball_box_rebound.py renders 4.0 s at 24 fps. An
+# "AT FRAME n" edit is bounded by this, and the vague prompt reads n against it
+# to say whether the edit lands early, midway or late in the clip.
+TOTAL_FRAMES = 96
+
+
 VOCAB = dsl.Vocabulary(
     objects=OBJECTS,
     properties=PROPERTIES,
     sim_bindings=SIM_BINDINGS,
     delete_bindings=DELETE_BINDINGS,
     baseline_physics=BASELINE_PHYSICS,
+    total_frames=TOTAL_FRAMES,
 )

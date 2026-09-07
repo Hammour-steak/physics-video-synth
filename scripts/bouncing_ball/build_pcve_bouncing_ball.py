@@ -62,29 +62,33 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_dead_ball',
         source_case_id=SOURCE_CASE_ID,
         seed=4101,
-        dsl='SET ball.restitution FROM 0.78 TO 0.30',
+        dsl='SET ball.restitution TIMES 0.4',
         edit_summary=(
-            'Ball made much less elastic. First bounce peaks at ~0.44 m instead '
-            'of the baseline ~0.86 m; the ball dies into a roll after two short '
-            'hops rather than the long bounce chain.'
+            "Ball made much less elastic. The bounce chain collapses: two "
+            "hops instead of seven, a 2.04 m path over the clip against "
+            "the baseline's 5.98 m, and the ball is down to 0.07 m/s at "
+            "the end where the baseline is still running at 0.87. First "
+            "floor contact is unchanged at frame 13."
         ),
     ),
     EditCase(
         case_id='edit_super_bouncy',
         source_case_id=SOURCE_CASE_ID,
         seed=4102,
-        dsl='SET ball.restitution FROM 0.78 TO 0.95',
+        dsl='SET ball.restitution TIMES 1.2',
         edit_summary=(
-            'Ball made near-elastic. Rebound peak climbs to ~1.25 m -- higher '
-            'than the original drop -- and the bounce chain barely decays over '
-            'the full clip.'
+            "Ball made near-elastic. The bounce chain barely decays: the "
+            "ball covers a 9.00 m path against the baseline's 5.98 m, and "
+            "at the end of the clip it is still airborne at 1.25 m -- "
+            "most of the way back to its 1.57 m release height -- and "
+            "still moving at 1.09 m/s."
         ),
     ),
     EditCase(
         case_id='edit_no_push',
         source_case_id=SOURCE_CASE_ID,
         seed=4103,
-        dsl='SET ball.initial_velocity FROM 0.5 TO 0.0',
+        dsl='SET ball.initial_velocity TIMES 0',
         edit_summary=(
             'Horizontal push removed. The ball drops straight down and bounces '
             'in place at x ~ 0 instead of drifting the ~0.29 m across the floor '
@@ -95,11 +99,32 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id='edit_strong_push',
         source_case_id=SOURCE_CASE_ID,
         seed=4104,
-        dsl='SET ball.initial_velocity FROM 0.5 TO 3.0',
+        dsl='SET ball.initial_velocity TIMES 6',
         edit_summary=(
             'Horizontal push made 6x stronger. The ball crosses the room and '
             'ends the clip at x ~ +4.4 m instead of the baseline +0.29 m, '
             'bouncing along the way.'
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip. It
+    # lands while the ball is in the air after its first bounce, so the first
+    # bounce is the source video's and every bounce after it is the edit's --
+    # which is something no whole-clip edit can show.
+    EditCase(
+        case_id='edit_dead_ball_after_first_bounce',
+        source_case_id=SOURCE_CASE_ID,
+        seed=4105,
+        dsl='SET ball.restitution TIMES 0.1 AT FRAME 20',
+        edit_summary=(
+            "Ball made much less elastic at frame 20, while it is airborne "
+            "between its first and second bounce. Frames 1-19 are the source "
+            "video frame for frame: the ball falls, hits the floor at frame "
+            "13 and rebounds to the same 0.86 m apex at frame 23. The second "
+            "landing is where the edit shows -- it barely leaves the floor "
+            "(0.06 m at frame 34) and the ball is at rest for the rest of the "
+            "clip, against the baseline's six apexes. The whole-clip version "
+            "of the same edit kills the first bounce too: the ball never gets "
+            "above 0.06 m at all."
         ),
     ),
 )
@@ -217,15 +242,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f'{parsed.property_name} ({parsed.object_id})':
                 {'from': dsl.baseline_value_for(parsed, VOCAB), 'to': parsed.to_value}}
     else:
         diff = {parsed.object_id: {'from': 'present', 'to': 'removed'}}
+    diff['timing'] = dsl.timing_diff(parsed, VOCAB)
     return {
         'edit_dsl': case.dsl,
         'edit_summary': case.edit_summary,
+        'applies_from_frame': dsl.starts_at_frame(parsed),
         'prompts': dsl.make_prompts(parsed, VOCAB),
         'physics_diff': diff,
         'physics_override': physics,
@@ -240,6 +270,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         'source_case_id': case.source_case_id,
         'edit_dsl': edit_info['edit_dsl'],
         'edit_summary': edit_info['edit_summary'],
+        'applies_from_frame': edit_info['applies_from_frame'],
         'physics_diff': edit_info['physics_diff'],
         'prompts': edit_info['prompts'],
     })
@@ -262,6 +293,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -280,6 +322,7 @@ def main() -> None:
             'string.'
         ),
         'baseline_physics': BASELINE_PHYSICS,
+        'total_frames': edit_vocab.TOTAL_FRAMES,
         'resolution': [int(args.resolution[0]), int(args.resolution[1])],
         'fps': int(args.fps),
         'duration_sec': float(args.duration_sec),
@@ -294,11 +337,33 @@ def main() -> None:
     source_record: dict[str, Any] = {
         'case_id': SOURCE_CASE_ID,
         'kind': 'source',
-        'description': (
-            'Source video: baseline parameters. The red ball is released at '
-            '1.37 m with a gentle 0.5 m/s horizontal push and bounces to a '
-            'peak of ~0.86 m; the chain decays across the clip.'
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The red ball is dropped with a gentle sideways push, "
+                    "meets the floor and bounces its way across the room. The "
+                    "bounces get smaller and it is still moving when the clip "
+                    "ends."
+                ),
+                "zh": (
+                    "红球带着轻微的水平初速落下,触地后一路弹跳着横穿房间。弹跳逐"
+                    "次变小,片尾时仍在运动。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The red ball is released from 1.57 m with a gentle 0.5 "
+                    "m/s horizontal push, first meets the floor on frame 13, "
+                    "and bounces its way across the room. The chain decays "
+                    "over the clip and the ball is still moving when it ends."
+                ),
+                "zh": (
+                    "红球从 1.57 m 高处释放,带 0.5 m/s 的水平初"
+                    "速,第 13 帧首次触地,之后一路弹跳着横穿房间。弹跳逐次衰"
+                    "减,片尾时球仍在运动。"
+                ),
+            },
+        },
         'case_dir': str(source_dir.resolve()),
         'status': 'pending',
     }
@@ -342,6 +407,7 @@ def main() -> None:
             'prompts_json': str(prompts_path.resolve()),
             'edit_dsl': edit_info['edit_dsl'],
             'edit_summary': edit_info['edit_summary'],
+            'applies_from_frame': edit_info['applies_from_frame'],
             'physics_diff': edit_info['physics_diff'],
             'prompts': edit_info['prompts'],
             'status': 'pending',

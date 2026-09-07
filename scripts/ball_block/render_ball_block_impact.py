@@ -27,6 +27,7 @@ TEMP_MP4_NAME = f"{OUTPUT_STEM}_tmp.mp4"
 BLEND_NAME = f"{OUTPUT_STEM}.blend"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 PHYSICS_TEMP_NAME = "physics_transforms.json"
+TIMED_EDITS_TEMP_NAME = "timed_edits.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
 BALL_RADIUS = 0.34
@@ -1552,6 +1553,14 @@ def run_physics_simulation(
     physics_path = args.out_dir / PHYSICS_TEMP_NAME
     physics = scenario["physics"]
     assert isinstance(physics, dict)
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP_NAME
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     block_location = physics["block_location"]
     ball_initial_location = physics["ball_initial_location"]
     ball_initial_velocity = physics["ball_initial_velocity"]
@@ -1601,11 +1610,13 @@ def run_physics_simulation(
             str(float(physics.get("block_rolling_friction", 0.006))),
             "--block-active",
             str(block_active_flag(physics)),
-        ],
+        ]
+        + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
         check=True,
     )
     records = json.loads(physics_path.read_text(encoding="utf-8"))
     physics_path.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return records
 
 
@@ -1631,6 +1642,38 @@ def apply_physics_animation(
             obj.keyframe_insert(data_path="rotation_quaternion", frame=frame)
 
     set_linear_keyframes(obj for obj, _prefix in animated)
+    if block is not None:
+        apply_disappearance(block, physics)
+
+
+def removal_frame(physics: dict) -> int | None:
+    """The first frame the block is absent on, if it starts out present."""
+    frames = physics["frames"]
+    if not frames or not frames[0]["wood_block_active"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames
+                 if not f["wood_block_active"]), None)
+
+
+def apply_disappearance(block: bpy.types.Object, physics: dict) -> None:
+    """Make a block the simulation removed mid-run leave the picture.
+
+    A whole-clip delete never builds the block at all; this is the other kind,
+    where it is struck, flies, and then is gone. CONSTANT interpolation so it
+    vanishes between two frames rather than fading across them.
+    """
+    gone_at = removal_frame(physics)
+    if gone_at is None or gone_at <= 1:
+        return
+    for path in ("hide_viewport", "hide_render"):
+        setattr(block, path, False)
+        block.keyframe_insert(data_path=path, frame=gone_at - 1)
+        setattr(block, path, True)
+        block.keyframe_insert(data_path=path, frame=gone_at)
+    for fcurve in block.animation_data.action.fcurves:
+        if fcurve.data_path in ("hide_viewport", "hide_render"):
+            for key in fcurve.keyframe_points:
+                key.interpolation = "CONSTANT"
 
 
 def set_linear_keyframes(objects: Iterable[bpy.types.Object]) -> None:
@@ -1678,6 +1721,10 @@ def export_ground_truth(
                     "present": True,
                     "object_name": block.name,
                     "dimensions_scene_units": list(WOOD_BLOCK_DIMENSIONS),
+                    # The frame it stops being on screen, for a block a timed
+                    # edit takes away partway through; None when it is there
+                    # for the whole clip.
+                    "removed_at_frame": removal_frame(physics),
                 }
             ),
         },
@@ -1718,9 +1765,9 @@ def export_ground_truth(
             "ball_angular_velocity": physics_frame["ball_angular_velocity"],
             "ball_floor_gap": physics_frame["ball_floor_gap"],
             "ball_block_gap": physics_frame["ball_block_gap"],
-            "wood_block_present": block is not None,
+            "wood_block_present": bool(physics_frame["wood_block_active"]),
         }
-        if block is not None:
+        if block is not None and physics_frame["wood_block_active"]:
             entry.update(
                 {
                     "wood_block_matrix_world": [

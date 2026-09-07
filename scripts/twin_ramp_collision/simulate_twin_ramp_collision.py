@@ -20,6 +20,10 @@ from pathlib import Path
 
 import pybullet as p
 
+# The shared timed-edit plumbing lives one directory up, next to the DSL.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pcve_timed_edits as timed  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from twin_ramp_geometry import build_track  # noqa: E402
 
@@ -105,7 +109,40 @@ def parse_args() -> argparse.Namespace:
     # appears in the output (frozen at its start pose, present=false).
     parser.add_argument("--ball-a-active", type=int, default=1)
     parser.add_argument("--ball-b-active", type=int, default=1)
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def apply_timed_params(client: int, params: dict, *, ball_ids: dict) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    ``ball_ids`` maps side (+1 = a, -1 = b) to body id and is edited in place
+    when one is removed. Anything this scene's edit vocabulary cannot produce
+    raises: an edit that is silently dropped renders as a video that looks like
+    the baseline.
+    """
+    sides = (1, -1)                       # the order the presence list is in
+    fields = {"mass": "mass", "friction": "lateralFriction",
+              "rolling_friction": "rollingFriction",
+              "restitution": "restitution"}
+    for key, value in params.items():
+        if key in ("active", "ball_active"):
+            slots = [ball_ids[side] for side in sides]
+            timed.remove_bodies(p, client, slots, value)
+            for side, body in zip(sides, slots):
+                ball_ids[side] = body
+            continue
+        for pfx, side in (("ball_a_", 1), ("ball_b_", -1)):
+            if key.startswith(pfx) and key[len(pfx):] in fields:
+                timed.set_one(p, client, ball_ids[side],
+                              fields[key[len(pfx):]], value)
+                break
+        else:
+            raise timed.unknown_param(key)
 
 
 def add_static_box(client, half_extents, position, orientation, friction, restitution):
@@ -264,6 +301,13 @@ def simulate(args: argparse.Namespace) -> dict:
             pos_b, _ = p.getBasePositionAndOrientation(ball_ids[-1], physicsClientId=client)
             return math.dist(pos_a, pos_b) - 2.0 * radius, pos_a, pos_b
 
+        timed_edits = timed.load_timed_edits(args.timed_edits_json)
+        timed.check_horizon(timed_edits, frame_end)
+        # Where each ball was last seen. One removed partway through has a real
+        # pose to freeze at; one that was never built keeps its release pose.
+        last_pose = {side: (releases[side], (0.0, 0.0, 0.0, 1.0))
+                     for side in (1, -1)}
+
         frames = []
         min_gap = float("inf")
         contact_frame = None
@@ -295,6 +339,14 @@ def simulate(args: argparse.Namespace) -> dict:
                                 contact_frame = frame_index
                                 contact_x = 0.5 * (pos_a_now[0] + pos_b_now[0])
 
+            # The edit lands at the top of its frame: this frame is the first
+            # one that shows it, and every frame before it is the source video.
+            if frame_index in timed_edits:
+                apply_timed_params(client, timed_edits[frame_index],
+                                   ball_ids=ball_ids)
+                both_present = (ball_ids[1] is not None
+                                and ball_ids[-1] is not None)
+
             record = {
                 "frame_index": frame_index,
                 "time_sec": (frame_index - 1) / float(fps),
@@ -305,12 +357,12 @@ def simulate(args: argparse.Namespace) -> dict:
             for name, side in (("a", 1), ("b", -1)):
                 if ball_ids[side] is None:
                     # DELETE edit: emit a frozen slot with present=false.
-                    frozen_pos = releases[side]
+                    frozen_pos, frozen_quat = last_pose[side]
                     record["balls"][name] = {
                         "side": side,
                         "present": False,
                         "location": list(frozen_pos),
-                        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
+                        "quaternion_xyzw": list(frozen_quat),
                         "linear_velocity": [0.0, 0.0, 0.0],
                         "angular_velocity": [0.0, 0.0, 0.0],
                         "speed": 0.0,
@@ -323,6 +375,7 @@ def simulate(args: argparse.Namespace) -> dict:
                 lin, ang = p.getBaseVelocity(ball_ids[side], physicsClientId=client)
                 speed = math.sqrt(sum(v * v for v in lin))
                 state[name] = (pos, lin, speed)
+                last_pose[side] = (pos, quat)
                 record["balls"][name] = {
                     "side": side,
                     "present": True,
@@ -404,7 +457,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "restitution": resolve("ball_a", "restitution"),
                     "rolling_friction": resolve("ball_a", "rolling_friction"),
                     "initial_location": list(releases[1]),
-                    "present": side_active[1],
+                    "present": ball_ids[1] is not None or side_active[1],
                 },
                 "ball_b": {
                     "side": -1,
@@ -414,7 +467,7 @@ def simulate(args: argparse.Namespace) -> dict:
                     "restitution": resolve("ball_b", "restitution"),
                     "rolling_friction": resolve("ball_b", "rolling_friction"),
                     "initial_location": list(releases[-1]),
-                    "present": side_active[-1],
+                    "present": ball_ids[-1] is not None or side_active[-1],
                 },
                 "ball_material": {
                     "friction": float(args.ball_friction),
@@ -440,6 +493,10 @@ def simulate(args: argparse.Namespace) -> dict:
             # negative, meaning the pair has no rebound left to give and simply
             # stops dead where it meets; --ball-restitution 0.40 (e = 0.16) is
             # well past that point and does exactly that.
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "min_gap_between_balls": min_gap,
                 "contact_frame": contact_frame,

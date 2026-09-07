@@ -23,6 +23,7 @@ PICNIC_GLB = MODELS_DIR / "french_picnic.glb"
 
 OUTPUT_STEM = "picnic_apple_ball"
 PHYSICS_TEMP = "physics_transforms.json"
+TIMED_EDITS_TEMP = "timed_edits.json"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
 
@@ -250,6 +251,14 @@ def import_glb_group(
     return obj
 
 
+def removal_frame(frames: list, key: str) -> int | None:
+    """The first frame ``key`` is absent on, if it starts out present."""
+    if not frames or not frames[0][key]["present"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames if not f[key]["present"]),
+                None)
+
+
 def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
     obj.rotation_mode = "QUATERNION"
     for fr in frames:
@@ -263,6 +272,20 @@ def apply_keyframes(obj: bpy.types.Object, frames: list, key: str) -> None:
         for fc in obj.animation_data.action.fcurves:
             for k in fc.keyframe_points:
                 k.interpolation = "LINEAR"
+    # A body a timed edit takes away mid-roll leaves the picture at the frame
+    # the simulation stopped reporting it. CONSTANT interpolation so it
+    # vanishes between two frames rather than fading across them.
+    gone_at = removal_frame(frames, key)
+    if gone_at is not None and gone_at > 1:
+        for path in ("hide_viewport", "hide_render"):
+            setattr(obj, path, False)
+            obj.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(obj, path, True)
+            obj.keyframe_insert(data_path=path, frame=gone_at)
+        for fc in obj.animation_data.action.fcurves:
+            if fc.data_path in ("hide_viewport", "hide_render"):
+                for k in fc.keyframe_points:
+                    k.interpolation = "CONSTANT"
 
 
 # --- Grass -------------------------------------------------------------------
@@ -502,6 +525,14 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     script = Path(__file__).with_name("simulate_picnic_apple_ball.py")
     out = args.out_dir / PHYSICS_TEMP
     physics = scenario["physics"]
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
     command = [
         python, str(script),
         "--out", str(out),
@@ -523,22 +554,30 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
         "--apple-active", str(int(physics["active"][0])),
         "--ball-active",  str(int(physics["active"][1])),
     ]
+    if timed_edits:
+        command += ["--timed-edits-json", str(timed_edits_path)]
     subprocess.run(command, check=True)
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return data
 
 
 def normalize_frames(physics: dict) -> list:
     frames = []
     for fr in physics["frames"]:
+        # `present` carries the per-frame flag a timed DELETE flips; keeping it
+        # is what lets apply_keyframes see the disappearance and lay down the
+        # hide_render keyframes for it.
         frames.append({
             "frame_index": fr["frame_index"],
             "soccer_ball": {
+                "present": fr["soccer_ball"].get("present", True),
                 "location": fr["soccer_ball"]["location"],
                 "quaternion_xyzw": fr["soccer_ball"]["quaternion_xyzw"],
             },
             "apple": {
+                "present": fr["apple"].get("present", True),
                 "location": fr["apple"]["location"],
                 "quaternion_xyzw": fr["apple"]["quaternion_xyzw"],
             },
@@ -658,10 +697,13 @@ def export_ground_truth(out_dir: Path, soccer_ball, apple, camera, physics: dict
     fps = int(physics["fps"])
     frame_end = int(physics["frame_end"])
 
-    def obj_entry(obj):
+    def obj_entry(obj, key):
         if obj is None:
             return {"present": False, "object_name": None}
-        return {"present": True, "object_name": obj.name}
+        return {"present": True, "object_name": obj.name,
+                # The frame it stops being on screen, for a body a timed edit
+                # takes away partway through.
+                "removed_at_frame": removal_frame(physics["frames"], key)}
 
     records = {
         "schema_version": 1,
@@ -670,8 +712,8 @@ def export_ground_truth(out_dir: Path, soccer_ball, apple, camera, physics: dict
         "frame_end": frame_end,
         "physics": {k: v for k, v in physics.items() if k != "frames"},
         "objects": {
-            "soccer_ball": obj_entry(soccer_ball),
-            "apple": obj_entry(apple),
+            "soccer_ball": obj_entry(soccer_ball, "soccer_ball"),
+            "apple": obj_entry(apple, "apple"),
         },
         "camera": {
             "object_name": camera.name,
@@ -685,7 +727,9 @@ def export_ground_truth(out_dir: Path, soccer_ball, apple, camera, physics: dict
     physics_by_frame = {int(fr["frame_index"]): fr for fr in physics["frames"]}
 
     def frame_entry(obj, pf_entry):
-        if obj is None:
+        # Presence is per frame: a timed delete leaves the body in the record
+        # up to its frame and out of it afterwards.
+        if obj is None or not pf_entry.get("present", True):
             return {"present": False}
         return {
             "present": True,

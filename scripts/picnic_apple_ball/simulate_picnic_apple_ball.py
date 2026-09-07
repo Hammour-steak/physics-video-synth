@@ -3,9 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import pybullet as p
+
+# The shared timed-edit plumbing lives one directory up, next to the DSL.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pcve_timed_edits as timed  # noqa: E402
 
 
 # A picnic scene: an apple falls from a low branch overhead and lands an
@@ -60,7 +65,42 @@ def parse_args() -> argparse.Namespace:
     # consumers keep a fixed two-object layout.
     parser.add_argument("--apple-active", type=int, default=1)
     parser.add_argument("--ball-active", type=int, default=1)
+    # Edits that land partway through the clip, as
+    # [{"frame": n, "params": {physics_key: new_value, ...}}]. Everything runs
+    # on the CLI values until frame n, where params are written into the live
+    # simulation and the run carries on from the state it had reached.
+    parser.add_argument("--timed-edits-json", type=Path, default=None)
     return parser.parse_args()
+
+
+def apply_timed_params(client: int, params: dict, *, bodies: dict) -> None:
+    """Write one frame's worth of edited physics into the live simulation.
+
+    ``bodies`` maps "ball"/"apple" to body id and is edited in place when one
+    is removed. Anything this scene's edit vocabulary cannot produce raises:
+    an edit that is silently dropped renders as a video that looks like the
+    baseline.
+    """
+    fields = {"mass": "mass", "friction": "lateralFriction",
+              "rolling_friction": "rollingFriction",
+              "restitution": "restitution"}
+    # The presence list is [apple, ball] -- the order render_picnic_apple_ball
+    # forwards it in.
+    order = ("apple", "ball")
+    for key, value in params.items():
+        if key == "active":
+            slots = [bodies[name] for name in order]
+            timed.remove_bodies(p, client, slots, value)
+            for name, body in zip(order, slots):
+                bodies[name] = body
+            continue
+        for name in order:
+            suffix = key[len(name) + 1:] if key.startswith(name + "_") else None
+            if suffix in fields:
+                timed.set_one(p, client, bodies[name], fields[suffix], value)
+                break
+        else:
+            raise timed.unknown_param(key)
 
 
 def simulate(args: argparse.Namespace) -> dict:
@@ -163,17 +203,31 @@ def simulate(args: argparse.Namespace) -> dict:
 
         identity_quat = [0.0, 0.0, 0.0, 1.0]
         zero_vec = [0.0, 0.0, 0.0]
+        timed_edits = timed.load_timed_edits(args.timed_edits_json)
+        timed.check_horizon(timed_edits, frame_end)
+        # Where each body was last seen, for the frames after a timed delete
+        # takes one away; one that was never built keeps its start pose.
+        last_pose = {"ball": (ball_start, identity_quat),
+                     "apple": (apple_start, identity_quat)}
         for frame_index in range(1, frame_end + 1):
             if frame_index > 1:
                 for _ in range(substeps):
                     p.stepSimulation(physicsClientId=client)
 
+            # The edit lands at the top of its frame: this frame is the first
+            # one that shows it, and every frame before it is the source video.
+            if frame_index in timed_edits:
+                bodies = {"ball": ball_id, "apple": apple_id}
+                apply_timed_params(client, timed_edits[frame_index], bodies=bodies)
+                ball_id, apple_id = bodies["ball"], bodies["apple"]
+
             if ball_id is not None:
                 ball_pos, ball_quat = p.getBasePositionAndOrientation(ball_id, physicsClientId=client)
                 ball_lin, ball_ang = p.getBaseVelocity(ball_id, physicsClientId=client)
                 ball_present = True
+                last_pose["ball"] = (ball_pos, ball_quat)
             else:
-                ball_pos, ball_quat = ball_start, identity_quat
+                ball_pos, ball_quat = last_pose["ball"]
                 ball_lin, ball_ang = zero_vec, zero_vec
                 ball_present = False
 
@@ -181,8 +235,9 @@ def simulate(args: argparse.Namespace) -> dict:
                 apple_pos, apple_quat = p.getBasePositionAndOrientation(apple_id, physicsClientId=client)
                 apple_lin, apple_ang = p.getBaseVelocity(apple_id, physicsClientId=client)
                 apple_present = True
+                last_pose["apple"] = (apple_pos, apple_quat)
             else:
-                apple_pos, apple_quat = apple_start, identity_quat
+                apple_pos, apple_quat = last_pose["apple"]
                 apple_lin, apple_ang = zero_vec, zero_vec
                 apple_present = False
 
@@ -245,6 +300,10 @@ def simulate(args: argparse.Namespace) -> dict:
                     "friction": float(args.grass_friction),
                 },
             },
+            "timed_edits": [
+                {"frame": frame, "params": params}
+                for frame, params in sorted(timed_edits.items())
+            ],
             "quality": {
                 "min_apple_ball_gap": min_apple_ball_gap,
                 "ball_roll_distance": ball_roll_distance,

@@ -70,7 +70,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_soccer_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=8101,
-        dsl="SET soccer_ball.mass FROM 0.43 TO 1.72",
+        dsl="SET soccer_ball.mass TIMES 4",
         edit_summary=(
             "Soccer ball made 4x heavier. The same apple impact now delivers "
             "a much smaller change of momentum, so the ball barely reacts: "
@@ -82,7 +82,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_slick_soccer_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=8102,
-        dsl="SET soccer_ball.friction FROM 0.25 TO 0.10",
+        dsl="SET soccer_ball.friction TIMES 0.4",
         edit_summary=(
             "Soccer ball's friction cut 2.5x. Both the lateral coefficient and "
             "the rolling one scale together, so after the same apple impact "
@@ -94,7 +94,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_grippy_soccer_ball",
         source_case_id=SOURCE_CASE_ID,
         seed=8103,
-        dsl="SET soccer_ball.friction FROM 0.25 TO 0.75",
+        dsl="SET soccer_ball.friction TIMES 3",
         edit_summary=(
             "Soccer ball's friction tripled. The grass grips the ball hard "
             "enough to damp the roll almost immediately: it moves only 0.04 m "
@@ -107,11 +107,13 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_apple",
         source_case_id=SOURCE_CASE_ID,
         seed=8104,
-        dsl="SET apple.mass FROM 0.15 TO 0.35",
+        dsl="SET apple.mass TIMES 2",
         edit_summary=(
-            "Apple made 2.3x heavier. The off-centre hit now carries more "
-            "momentum into the ball: it rolls 1.85 m -- about 3.4x the 0.54 m "
-            "baseline -- and comes to rest before the end of the shot."
+            "Apple made twice as heavy. The off-centre hit carries more "
+            "momentum into the ball: it rolls 1.66 m, about three times "
+            "the baseline's 0.54 m, and comes to rest before the shot "
+            "ends. The apple itself is slowed by the exchange, covering "
+            "2.07 m against 2.37 m."
         ),
     ),
     EditCase(
@@ -134,6 +136,27 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "branch and lands on the grass beside the picnic blanket instead "
             "of on top of a ball -- a single, isolated apple drop rather "
             "than an oblique hit and a roll."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_apple: they differ by the AT
+    # FRAME clause alone. Taking the apple away after it has already struck
+    # the ball is what makes the timing readable -- removing it beforehand
+    # leaves a clip in which nothing moves at all.
+    EditCase(
+        case_id="edit_remove_apple_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=10107,
+        dsl="DELETE apple AT FRAME 18",
+        edit_summary=(
+            "Apple removed at frame 18, four frames after it reaches the "
+            "soccer ball at frame 14. Frames 1-17 are the source video frame "
+            "for frame, impact included: the ball is knocked back to 0.64 m/s "
+            "and the apple is 0.28 m past its start when it disappears. The "
+            "ball rolls on to x=-0.54 exactly as in the source, with nothing "
+            "left on the grass to follow it. The whole-clip version of the "
+            "same delete is a different video again: with no apple to arrive, "
+            "the ball never moves at all."
         ),
     ),
 )
@@ -251,15 +274,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -274,6 +302,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -296,6 +325,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -313,6 +353,7 @@ def main() -> None:
             "diff are all derived from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -327,13 +368,35 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. An apple falls 1.3 m from an "
-            "overhead branch onto a soccer ball resting on the grass; the "
-            "apple's 0.105 m horizontal offset from the ball's centre gives "
-            "the impact enough lever arm to torque the ball, and it rolls "
-            "~0.54 m across the grass before friction brings it to rest."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The apple falls from an overhead branch onto the soccer "
+                    "ball resting on the grass. It lands off-centre, torquing "
+                    "the ball into a roll until friction stops it, and "
+                    "bounces away itself."
+                ),
+                "zh": (
+                    "苹果从头顶的树枝落到草地上的足球上,落点偏离球心,把足球拧得"
+                    "滚起来,滚一段后被摩擦停住;苹果自己则弹开。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "The apple falls from an overhead branch onto the soccer "
+                    "ball resting on the grass, landing 0.105 m off the "
+                    "ball's centre. That lever arm is enough to torque the "
+                    "ball into a roll: the soccer ball travels 0.54 m across "
+                    "the grass before friction stops it, while the apple "
+                    "bounces on to end 2.37 m from where it fell."
+                ),
+                "zh": (
+                    "苹果从头顶的树枝落到草地上的足球上,落点偏离球心 0.105"
+                    " m。这个力臂足以把球拧得滚起来:足球在草地上滚 0.54 "
+                    "m 后被摩擦停住,苹果则弹开,相对落点移动 2.37 m。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -377,6 +440,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

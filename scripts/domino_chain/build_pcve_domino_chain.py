@@ -59,7 +59,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_domino_2",
         source_case_id=SOURCE_CASE_ID,
         seed=6101,
-        dsl="SET domino_2.mass FROM 0.12 TO 1.2",
+        dsl="SET domino_2.mass TIMES 10",
         edit_summary=(
             "Second tile made 10x heavier. Tile 1 falls onto it as usual, but "
             "the heavier tile only tilts 1 degree before absorbing the impact "
@@ -71,7 +71,7 @@ EDIT_CASES: tuple[EditCase, ...] = (
         case_id="edit_heavy_domino_3",
         source_case_id=SOURCE_CASE_ID,
         seed=6102,
-        dsl="SET domino_3.mass FROM 0.12 TO 1.2",
+        dsl="SET domino_3.mass TIMES 10",
         edit_summary=(
             "Third tile made 10x heavier. The first two tiles topple normally "
             "(tile 1 to 75 degrees, tile 2 to 29 degrees), but the impact on "
@@ -90,6 +90,40 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "pre-tilted past its critical angle. No push, no first fall, and "
             "no chain: tiles 2, 3, and 4 all stand undisturbed for the whole "
             "shot. Toppled=0/4."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_domino_1: the two differ by
+    # the AT FRAME clause alone and render as three-way distinct videos against
+    # the source. Taking the leftmost tile away *before* it falls is what the
+    # whole-clip version already covers -- and it deletes the whole cascade
+    # with it, since that tile is the only one that starts pre-tilted. Removing
+    # it at frame 24 instead catches it in mid-fall, three frames after its
+    # leading edge first touches tile 2: the push has been handed over, so the
+    # cascade still runs, but it runs off a partial impulse and lags the source
+    # by six to eight frames the rest of the way down the row.
+    EditCase(
+        case_id="edit_remove_domino_1_mid_fall",
+        source_case_id=SOURCE_CASE_ID,
+        seed=6107,
+        dsl="DELETE domino_1 AT FRAME 24",
+        edit_summary=(
+            "First tile removed at frame 24 of 96, while it is still falling. "
+            "Frames 1-23 are the source video frame for frame: tile 1 tips "
+            "from its 12 degree start and reaches 38 degrees, having met tile "
+            "2 at frame 21 and started it moving (tile 2 is 5 degrees over at "
+            "frame 24). Tile 1 then vanishes mid-fall, leaning but nowhere "
+            "near down, and the rest of the row carries on under the momentum "
+            "it already had: tiles 2, 3 and 4 all still topple, but each "
+            "crosses 45 degrees six to eight frames later than in the source "
+            "(frames 43, 51, 55 against 37, 43, 47) and the row settles around "
+            "frame 60 instead of frame 52. The end state matches the baseline "
+            "-- 76, 76 and flat at 90 degrees, within 0.2 degrees and 4 cm -- "
+            "so what separates this from the source is the missing tile plus a "
+            "visibly slower cascade. Toppled=3/4. The whole-clip version of "
+            "the same delete (edit_remove_domino_1) is a different video "
+            "again: with no pre-tilted tile to start it, nothing in the row "
+            "ever moves."
         ),
     ),
     EditCase(
@@ -243,15 +277,20 @@ def render_case(
 
 def build_edit_record(case: EditCase) -> dict[str, Any]:
     parsed = dsl.parse(case.dsl, VOCAB)
-    physics = dsl.to_physics_override(parsed, VOCAB)
+    # The scenario override, not the raw parameter dict: an edit that lands
+    # partway through ships a schedule the simulator applies at its frame,
+    # leaving the frames before it on the source video's own physics.
+    physics = dsl.to_scenario_override(parsed, VOCAB)
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
+    diff["timing"] = dsl.timing_diff(parsed, VOCAB)
     return {
         "edit_dsl": case.dsl,
         "edit_summary": case.edit_summary,
+        "applies_from_frame": dsl.starts_at_frame(parsed),
         "prompts": dsl.make_prompts(parsed, VOCAB),
         "physics_diff": diff,
         "physics_override": physics,
@@ -266,6 +305,7 @@ def write_prompt_file(case_dir: Path, case: EditCase, edit_info: dict[str, Any])
         "source_case_id": case.source_case_id,
         "edit_dsl": edit_info["edit_dsl"],
         "edit_summary": edit_info["edit_summary"],
+        "applies_from_frame": edit_info["applies_from_frame"],
         "physics_diff": edit_info["physics_diff"],
         "prompts": edit_info["prompts"],
     })
@@ -288,6 +328,17 @@ def clean_stale(out_root: Path, keep_ids: set[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    # Timed edits name a frame, and the vocabulary is where that number is
+    # bounded and turned into prompt wording. If the render length ever drifts
+    # away from it, every "AT FRAME n" in the suite quietly means something
+    # else, so it is checked here rather than discovered in a video.
+    rendered_frames = int(round(float(args.duration_sec) * int(args.fps)))
+    if rendered_frames != edit_vocab.TOTAL_FRAMES:
+        raise SystemExit(
+            f"{args.duration_sec}s at {args.fps} fps renders {rendered_frames} "
+            f"frames, but edit_vocab.TOTAL_FRAMES says "
+            f"{edit_vocab.TOTAL_FRAMES}. Update one to match the other."
+        )
     args.out_root.mkdir(parents=True, exist_ok=True)
 
     keep_ids = {SOURCE_CASE_ID, *(c.case_id for c in EDIT_CASES)}
@@ -305,6 +356,7 @@ def main() -> None:
             "from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
+        "total_frames": edit_vocab.TOTAL_FRAMES,
         "resolution": [int(args.resolution[0]), int(args.resolution[1])],
         "fps": int(args.fps),
         "duration_sec": float(args.duration_sec),
@@ -319,12 +371,37 @@ def main() -> None:
     source_record: dict[str, Any] = {
         "case_id": SOURCE_CASE_ID,
         "kind": "source",
-        "description": (
-            "Source video: default parameters. Four identical tiles sit "
-            "0.8 m apart in a straight row; the first one starts pre-tilted "
-            "past its critical angle so gravity begins the fall. Each tile "
-            "topples the next and all four end up flat on the tabletop."
-        ),
+        "description": {
+            "vague": {
+                "en": (
+                    "The first domino starts already tipped past its balance "
+                    "point and falls into the second domino, which topples "
+                    "the third domino, which topples the fourth domino. All "
+                    "four end up flat on the table."
+                ),
+                "zh": (
+                    "第 1 张骨牌起始就已倾过平衡点,倒下去撞倒第 2 张骨牌,"
+                    "第 2 张骨牌撞倒第 3 张骨牌,第 3 张骨牌再撞倒第 4"
+                    " 张骨牌。四张最后都平躺在桌面上。"
+                ),
+            },
+            "quantitative": {
+                "en": (
+                    "Four identical tiles stand 0.80 m apart in a straight "
+                    "row. The first domino starts pre-tilted past its "
+                    "critical angle so gravity begins the fall; it topples "
+                    "the second domino, which topples the third domino, which "
+                    "topples the fourth domino. All four end up flat on the "
+                    "tabletop."
+                ),
+                "zh": (
+                    "四张相同的骨牌间隔 0.80 m 立成一排。第 1 张骨牌预"
+                    "先倾斜到临界角以外,靠重力起倒,推倒第 2 张骨牌,第 2 "
+                    "张推倒第 3 张骨牌,第 3 张再推倒第 4 张骨牌。四张最"
+                    "后都平躺在桌面上。"
+                ),
+            },
+        },
         "case_dir": str(source_dir.resolve()),
         "status": "pending",
     }
@@ -368,6 +445,7 @@ def main() -> None:
             "prompts_json": str(prompts_path.resolve()),
             "edit_dsl": edit_info["edit_dsl"],
             "edit_summary": edit_info["edit_summary"],
+            "applies_from_frame": edit_info["applies_from_frame"],
             "physics_diff": edit_info["physics_diff"],
             "prompts": edit_info["prompts"],
             "status": "pending",

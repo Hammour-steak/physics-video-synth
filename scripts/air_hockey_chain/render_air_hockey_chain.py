@@ -20,6 +20,7 @@ ROOM_GLB = MODELS_DIR / "vintage_modern_living_room_with_arcades.glb"
 TABLE_GLB = MODELS_DIR / "air_hockey_arcade.glb"
 
 OUTPUT_STEM = "air_hockey_chain"
+TIMED_EDITS_TEMP = "timed_edits.json"
 PHYSICS_TEMP = "physics_transforms.json"
 GROUND_TRUTH_NAME = "ground_truth_transforms.json"
 SCENARIO_METADATA_NAME = "scenario_metadata.json"
@@ -123,6 +124,10 @@ MALLET_COLOURS = (
     ("blue", (0.020, 0.070, 0.420)),
     ("red", (0.520, 0.030, 0.030)),
     ("white", (0.800, 0.800, 0.810)),
+    # Slot 3, the one a PCVE ADD edit places. Green because it has to be told
+    # apart from the other three at a glance -- the relay is only readable if
+    # every disc is its own colour.
+    ("green", (0.045, 0.330, 0.090)),
 )
 
 # Where the room's own lights actually are, measured off the room mesh. Lamps
@@ -249,14 +254,29 @@ def create_scenario(args: argparse.Namespace) -> dict:
                 mallet_mass,
                 mallet_mass * float(args.middle_mass_scale),
                 mallet_mass,
+                mallet_mass,
             ],
-            "mallet_restitutions": [float(args.mallet_restitution)] * 3,
+            "mallet_restitutions": [float(args.mallet_restitution)] * 4,
             # The mallets' own friction tracks the surface's by default: the
             # two are multiplied into one effective coefficient, and the CLI
             # sweeps have always moved them together as a single "air cushion"
             # dial. A PCVE edit can still move one without the other.
-            "mallet_frictions": [float(args.surface_friction)] * 3,
-            "mallet_active": [1, 1, 1],
+            "mallet_frictions": [float(args.surface_friction)] * 4,
+            # Four slots (blue, red, white, green). Only the green slot reads
+            # 0 at baseline: an ADD edit turns it on, a DELETE edit turns one
+            # of the other three off.
+            "mallet_active": [1, 1, 1, 0],
+            # Measured off the table model; the PCVE geometry anchors convert
+            # an ADD edit's "N radii" into table coordinates with it.
+            "mallet_radius": 0.0620,
+            # Where the three relay discs stand, and where the green one goes
+            # when an edit places it. Quarter, half and three-quarter points of
+            # the table's length, with the relay running from blue towards
+            # white.
+            "mallet_0_initial_location": [1.79325, 0.0, 0.0328],
+            "mallet_1_initial_location": [1.19550, 0.0, 0.0328],
+            "mallet_2_initial_location": [0.59775, 0.0, 0.0328],
+            "mallet_3_initial_location": [0.94750, 0.0, 0.0328],
             "surface_friction": float(args.surface_friction),
             "table_restitution": 0.10,
             "gravity_z": -9.8,
@@ -520,11 +540,28 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
     script = Path(__file__).with_name("simulate_air_hockey_chain.py")
     out = args.out_dir / PHYSICS_TEMP
     physics = scenario["physics"]
+    # Edits that land partway through the clip travel to the simulator as a
+    # file rather than as flags: each entry is a whole parameter dict, and the
+    # sim applies it at the top of its frame.
+    timed_edits = physics.get("timed_edits") or []
+    timed_edits_path = args.out_dir / TIMED_EDITS_TEMP
+    if timed_edits:
+        timed_edits_path.parent.mkdir(parents=True, exist_ok=True)
+        timed_edits_path.write_text(json.dumps(timed_edits, indent=2), encoding="utf-8")
+    green_x = physics.get("mallet_3_initial_location", [0.9475, 0.0, 0.0328])[0]
 
-    def triple(key: str) -> list[str]:
-        values = physics[key]
-        if len(values) != 3:
-            raise ValueError(f"scenario physics {key!r} must have 3 entries, got {values!r}")
+    def quad(key: str, pad) -> list[str]:
+        """Four per-mallet values, padding a legacy three-entry list.
+
+        Scenario and override files written before the green mallet existed
+        carry three entries; rather than reject them, the fourth slot takes
+        `pad`, which reproduces exactly what those files meant.
+        """
+        values = list(physics[key])
+        if len(values) == 3:
+            values = values + [pad]
+        if len(values) != 4:
+            raise ValueError(f"scenario physics {key!r} must have 3 or 4 entries, got {values!r}")
         return [str(float(v)) for v in values]
 
     subprocess.run(
@@ -537,15 +574,18 @@ def run_physics(args: argparse.Namespace, scenario: dict) -> dict:
             "--surface-friction", str(float(physics["surface_friction"])),
             "--table-restitution", str(float(physics["table_restitution"])),
             "--gravity-z", str(float(physics["gravity_z"])),
-            "--mallet-masses", *triple("mallet_masses"),
-            "--mallet-restitutions", *triple("mallet_restitutions"),
-            "--mallet-frictions", *triple("mallet_frictions"),
-            "--mallet-active", *[str(int(v)) for v in physics["mallet_active"]],
-        ],
+            "--mallet-masses", *quad("mallet_masses", physics["mallet_masses"][0]),
+            "--mallet-restitutions", *quad("mallet_restitutions", physics["mallet_restitutions"][0]),
+            "--mallet-frictions", *quad("mallet_frictions", physics["mallet_frictions"][0]),
+            "--mallet-active", *[str(int(float(v))) for v in quad("mallet_active", 0)],
+            "--mallet-3-x", str(float(green_x)),
+        ]
+        + (["--timed-edits-json", str(timed_edits_path)] if timed_edits else []),
         check=True,
     )
     data = json.loads(out.read_text(encoding="utf-8"))
     out.unlink(missing_ok=True)
+    timed_edits_path.unlink(missing_ok=True)
     return data
 
 
@@ -567,6 +607,41 @@ def apply_keyframes(mallets: list[bpy.types.Object | None], physics: dict) -> No
             for fcurve in obj.animation_data.action.fcurves:
                 for key in fcurve.keyframe_points:
                     key.interpolation = "LINEAR"
+    apply_disappearances(mallets, physics)
+
+
+def removal_frame(physics: dict, index: int) -> int | None:
+    """The first frame mallet ``index`` is absent on, if it starts out there."""
+    frames = physics["frames"]
+    if not frames or not frames[0][f"mallet_{index}"]["active"]:
+        return None
+    return next((int(f["frame_index"]) for f in frames
+                 if not f[f"mallet_{index}"]["active"]), None)
+
+
+def apply_disappearances(mallets: list, physics: dict) -> None:
+    """Make a mallet the simulation removed mid-run leave the picture.
+
+    A whole-clip delete never builds the disc at all; this is the other kind,
+    where it slides through the frames it has in the source and then is gone.
+    The keyframes are CONSTANT so it vanishes between two frames rather than
+    fading across them.
+    """
+    for index, obj in enumerate(mallets):
+        if obj is None:
+            continue
+        gone_at = removal_frame(physics, index)
+        if gone_at is None or gone_at <= 1:
+            continue
+        for path in ("hide_viewport", "hide_render"):
+            setattr(obj, path, False)
+            obj.keyframe_insert(data_path=path, frame=gone_at - 1)
+            setattr(obj, path, True)
+            obj.keyframe_insert(data_path=path, frame=gone_at)
+        for fcurve in obj.animation_data.action.fcurves:
+            if fcurve.data_path in ("hide_viewport", "hide_render"):
+                for key in fcurve.keyframe_points:
+                    key.interpolation = "CONSTANT"
 
 
 # --- Scene -------------------------------------------------------------------
@@ -646,7 +721,10 @@ def build_scene(args: argparse.Namespace, physics: dict, scenario: dict):
 
     join_meshes(import_glb(ROOM_GLB), "living_room")
     master = import_table_and_mallet()
-    mallets = build_mallets(master, scenario["physics"]["mallet_active"])
+    active = list(scenario["physics"]["mallet_active"])
+    while len(active) < len(MALLET_COLOURS):
+        active.append(0)
+    mallets = build_mallets(master, active)
     apply_keyframes(mallets, physics)
 
     # What the camera and the lamps are aimed at. Now that the relay is spread
@@ -752,7 +830,11 @@ def export_ground_truth(out_dir: Path, mallets, camera, physics: dict, scenario:
         "objects": {
             f"mallet_{i}": (
                 {"present": False, "object_name": None} if o is None
-                else {"present": True, "object_name": o.name}
+                else {"present": True, "object_name": o.name,
+                      # The frame it stops being on screen, for a mallet a
+                      # timed edit takes away partway through; None when it is
+                      # there for the whole clip.
+                      "removed_at_frame": removal_frame(physics, i)}
             )
             for i, o in enumerate(mallets)
         },
@@ -771,7 +853,9 @@ def export_ground_truth(out_dir: Path, mallets, camera, physics: dict, scenario:
         source = by_frame[frame]
         entry = {"frame_index": frame, "time_sec": (frame - 1) / float(fps)}
         for index, obj in enumerate(mallets):
-            if obj is None:
+            # Absent either because the edit removed the mallet before the clip
+            # started, or because a timed edit removed it at this frame.
+            if obj is None or not source[f"mallet_{index}"]["active"]:
                 entry[f"mallet_{index}"] = {"present": False}
                 continue
             entry[f"mallet_{index}"] = {
