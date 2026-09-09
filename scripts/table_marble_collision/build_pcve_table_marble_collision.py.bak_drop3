@@ -1,27 +1,31 @@
-"""Build the table_drop_collision PCVE suite.
+"""Build the table_marble_collision PCVE suite.
 
 Each edit is declared as a single ``edit_dsl`` string. Prompts (precise +
 vague, zh + en), scenario overrides, and the physics diff for the manifest
 are all derived from that one string.
 
-The scene: a "new" tennis ball rolls off a coffee table, arcs to the floor,
-and strikes an "old" tennis ball waiting on the rug in line with the lane.
-At baseline the rolling ball leaves the lip at 1.05 m/s, lands 0.67 m out,
-and the head-on hit sends the target 0.30 m west while the rolling ball is
-kicked back 0.74 m east. Every value below was picked by sweeping
-simulate_table_drop_collision.py directly; the numbers in each edit_summary
-are that sweep's output at the suite's defaults.
+The scene: a 100 mm glass marble is rolled along a bar table at 1.31 m/s
+into a 50 mm glass marble sitting near the far end. Both marbles are the
+same glass; at baseline the small one weighs 1/8 of the big one (mass goes
+as the cube of the radius), and the big marble arrives at ~0.83 m/s and
+sends the small one skittering forward while itself continuing on. The
+suite varies mass ratio (directly via `mass`, not by resizing the marble),
+push speed, and restitution to show the full range a two-body impact has
+to offer -- from the small marble rocketing off, to it barely twitching,
+to a clean miss when the push runs out.
+
+Every value below was picked by sweeping simulate_table_marble_collision.py
+directly; the numbers in each edit_summary are that sweep's output at the
+suite's defaults.
 
 Notes on the edit surface:
-- Only the target ball can be DELETEd. The rolling ball is the trigger
-  that drives the whole simulation (the sim is not built to run without
-  it), so a DELETE on it is not exposed.
-- The rolling ball is the only one with a non-zero baseline velocity, so
+- Only the small marble can be DELETEd. The big one drives the roll off
+  the far end, and the sim is not built to run without it.
+- The big marble is the only one with a non-zero baseline velocity, so
   `initial_velocity` is bound only on it (via launch_speed).
-- 3+ different push-speed cases were surveyed; the sim's high-substep
-  contact starts to miss above 1.5 m/s (fast rolling ball passes over the
-  target), so the "hard break" analogue is not in the suite -- only the
-  soft-push (miss) direction is.
+- Restitution edits on the big marble also affect its floor bounce and
+  are less isolated visually; only the small-marble restitution is in
+  the suite.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ import edit_vocab             # noqa: E402
 
 WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
-RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "table_drop_collision" / "render_table_drop_collision.py"
+RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "table_marble_collision" / "render_table_marble_collision.py"
 
 
 VOCAB = edit_vocab.VOCAB
@@ -61,91 +65,110 @@ class EditCase:
     seed: int
     dsl: str
     edit_summary: str
-    # Optional per-case override of the suite's default duration; unused now
-    # (was 3.4s for a few edits where the ball keeps rolling past the shot).
     duration_sec: float | None = None
 
 
-SOURCE_CASE_ID = "table_drop_collision_baseline"
+SOURCE_CASE_ID = "table_marble_collision_baseline"
 
 
 EDIT_CASES: tuple[EditCase, ...] = (
     EditCase(
-        case_id="edit_heavy_rolling_ball",
+        case_id="edit_heavy_small_marble",
         source_case_id=SOURCE_CASE_ID,
-        seed=11101,
-        dsl="SET rolling_ball.mass TIMES 5",
+        seed=17101,
+        dsl="SET small_marble.mass TIMES 5",
         edit_summary=(
-            "Rolling ball made 5x heavier. The impact now carries much more "
-            "momentum into the target: it rockets 1.64 m across the floor "
-            "(5x the baseline's 0.30 m), and the rolling ball keeps driving "
-            "on behind it, ending 0.98 m past the lip instead of 0.74 m."
+            "Small marble made five times heavier, so the mass ratio "
+            "drops from 8:1 to about 1.6:1. It barely reacts to the hit "
+            "-- 0.29 m against the baseline's 0.68 m -- while the big "
+            "marble is checked hard on impact and rolls only 0.70 m "
+            "instead of 0.89 m."
         ),
     ),
     EditCase(
-        case_id="edit_light_rolling_ball",
+        case_id="edit_heavy_big_marble",
         source_case_id=SOURCE_CASE_ID,
-        seed=11102,
-        dsl="SET rolling_ball.mass TIMES 0.25",
+        seed=17102,
+        dsl="SET big_marble.mass TIMES 5",
         edit_summary=(
-            "New tennis ball made four times lighter. It still lands on "
-            "the old one but bounces off it rather than driving it: the "
-            "old ball barely moves, 0.03 m against the baseline's 0.30 m, "
-            "and the light ball comes to rest 0.52 m from its start "
-            "instead of 0.88 m."
+            "Big marble made 5x heavier (1.309 -> 6.545 kg). The mass "
+            "ratio is now 40:1 instead of 8:1, so the impact drives even "
+            "more momentum into the small marble: it rockets 0.85 m along "
+            "the table (vs 0.68 m baseline). The big marble follows through "
+            "almost undisturbed."
         ),
     ),
     EditCase(
-        case_id="edit_heavy_target_ball",
+        case_id="edit_matched_pair",
         source_case_id=SOURCE_CASE_ID,
-        seed=11103,
-        dsl="SET target_ball.mass TIMES 5",
+        seed=17103,
+        dsl="SET big_marble.mass TIMES 0.125",
         edit_summary=(
-            "Target ball made 5x heavier. The rolling ball hits a wall of "
-            "mass and rebounds backward -- ending up EAST of the lip "
-            "instead of west of it -- and the target only creeps 0.02 m "
-            "instead of the baseline's 0.30 m."
+            "Big marble made exactly as heavy as the small one: it is "
+            "twice the radius, so an eighth of its mass is the small "
+            "one's mass, and the ratio goes from 8:1 to 1:1. The hit "
+            "becomes an equal-mass exchange -- the big one is stopped "
+            "short at 0.66 m against the baseline's 0.89 m, and the small "
+            "one is nudged only 0.18 m, because table friction damps most "
+            "of the transfer between two light marbles."
         ),
     ),
     EditCase(
         case_id="edit_soft_push",
         source_case_id=SOURCE_CASE_ID,
-        seed=11104,
-        dsl="SET rolling_ball.initial_velocity TIMES 0.6",
+        seed=17104,
+        dsl="SET big_marble.initial_velocity TIMES 0.7",
         edit_summary=(
-            "New tennis ball pushed more gently across the table. It "
-            "reaches the lip at lower speed, is thrown less far off the "
-            "edge, and lands short of the old ball -- no contact at all. "
-            "The old ball stays exactly where it started, where the "
-            "baseline moves it 0.30 m; the new ball bounces its way out "
-            "across the floor alone, nine hops against the baseline's "
-            "five."
+            "Big marble pushed more gently. It slows against table "
+            "friction and stops short of the small marble -- 0.49 m of "
+            "travel against the baseline's 0.89 -- so no contact happens "
+            "at all. The small marble sits untouched for the whole shot."
         ),
     ),
     EditCase(
-        case_id="edit_dead_rolling_ball",
+        case_id="edit_dead_small_marble",
         source_case_id=SOURCE_CASE_ID,
-        seed=11105,
-        dsl="SET rolling_ball.restitution TIMES 0.1",
+        seed=17105,
+        dsl="SET small_marble.restitution TIMES 0.05",
         edit_summary=(
-            "New tennis ball's restitution killed. Its floor bounce and "
-            "its impact against the old ball both go inelastic: it stops "
-            "bouncing entirely -- no hops against the baseline's five -- "
-            "and the pair sticks rather than transferring cleanly. The "
-            "old ball moves only 0.12 m instead of 0.30 m, while the new "
-            "one drives on to 1.09 m from its start against 0.88 m."
+            "Small marble's restitution killed. The impact goes almost "
+            "fully inelastic: the small marble absorbs the collision "
+            "instead of springing away, moving 0.26 m against the "
+            "baseline's 0.68 m, while the big marble is barely checked "
+            "and drives on to 0.93 m rather than being handed off "
+            "cleanly."
         ),
     ),
     EditCase(
-        case_id="edit_remove_target_ball",
+        case_id="edit_remove_small_marble",
         source_case_id=SOURCE_CASE_ID,
-        seed=11106,
-        dsl="DELETE target_ball",
+        seed=17106,
+        dsl="DELETE small_marble",
         edit_summary=(
-            "Target ball removed. The rolling ball leaves the table and "
-            "lands on the rug exactly where the baseline predicts -- "
-            "(-0.67, -0.29) -- and, with nothing to strike, rolls on "
-            "unobstructed for 1.18 m before friction stops it."
+            "Small marble removed. The big marble rolls across the bar "
+            "table unobstructed -- 1.01 m of travel instead of the "
+            "baseline's 0.89 m -- and never hits anything."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_small_marble: they differ by
+    # the AT FRAME clause alone. Taking the small marble away after it has
+    # been struck is what makes the timing readable -- removing it beforehand
+    # leaves the big marble with nothing to slow it.
+    EditCase(
+        case_id="edit_remove_small_marble_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=8107,
+        dsl="DELETE small_marble AT FRAME 19",
+        edit_summary=(
+            "Small marble removed at frame 19, four frames after the big one "
+            "strikes it at frame 15. Frames 1-18 are the source video frame "
+            "for frame, impact included: the big marble arrives at 0.85 m/s "
+            "and leaves at 0.66, and the small one is 0.22 m along and still "
+            "rolling when it disappears. The big marble then coasts to rest "
+            "at x=+0.27 exactly as in the source. The whole-clip version of "
+            "the same delete is a different video again: with nothing to hit, "
+            "the big marble keeps its speed and runs on to x=+0.39."
         ),
     ),
 )
@@ -156,19 +179,17 @@ EDIT_CASES: tuple[EditCase, ...] = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build the table_drop_collision PCVE suite (1 source + N edits)."
+        description="Build the table_marble_collision PCVE suite (1 source + N edits)."
     )
     parser.add_argument(
         "--out-root",
         type=Path,
-        default=WORKSPACE_DIR / "renders" / "pcve_table_drop_collision_suite",
+        default=WORKSPACE_DIR / "renders" / "pcve_table_marble_collision_suite",
     )
     parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
     parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=4.0,
-                        help="Default clip length; edits that leave the ball "
-                             "still running override this per-case.")
+    parser.add_argument("--duration-sec", type=float, default=4.0)
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     parser.add_argument("--skip-existing", action="store_true")
@@ -219,7 +240,7 @@ def render_command(
 
 
 def standardize_render_outputs(case_dir: Path, *, has_overrides: bool) -> dict[str, str]:
-    video_source = case_dir / "table_drop_collision.mp4"
+    video_source = case_dir / "table_marble_collision.mp4"
     if not video_source.exists():
         candidates = sorted(case_dir.glob("*.mp4"))
         if not candidates:
@@ -338,14 +359,13 @@ def main() -> None:
     manifest_path = args.out_root / "suite_manifest.json"
     manifest: dict[str, Any] = {
         "schema_version": 3,
-        "suite_name": "pcve_table_drop_collision_suite",
+        "suite_name": "pcve_table_marble_collision_suite",
         "description": (
-            "One source table-drop head-on-collision video plus N edited "
-            "variants. A tennis ball rolls off a coffee table onto a second "
-            "tennis ball on the floor. Each edit is declared with a single "
-            "edit-DSL string; prompts (precise + vague, zh + en), scenario "
-            "overrides, and the physics diff are all derived from that one "
-            "string."
+            "One source big/small marble-collision video plus N edited "
+            "variants. A 100 mm glass marble is rolled into a 50 mm one on "
+            "the bar top. Each edit is declared with a single edit-DSL "
+            "string; prompts (precise + vague, zh + en), scenario overrides, "
+            "and the physics diff are all derived from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
         "total_frames": edit_vocab.TOTAL_FRAMES,
@@ -366,27 +386,29 @@ def main() -> None:
         "description": {
             "vague": {
                 "en": (
-                    "The new tennis ball is pushed along the table, runs off "
-                    "the lip and drops to the rug, landing on the old tennis "
-                    "ball waiting there and driving it along the floor."
+                    "The big marble is rolled along the bar table into the "
+                    "small marble sitting near the far end. The small marble "
+                    "is sent forward and the big marble carries on behind it."
                 ),
                 "zh": (
-                    "新网球被推过桌面,滚出桌沿掉到地毯上,砸在等在那里的旧网球上"
-                    "并把它推走一段。"
+                    "大玻璃球沿吧台滚向停在远端的小玻璃球。小玻璃球被撞得向前跑,"
+                    "大玻璃球在后面继续前进。"
                 ),
             },
             "quantitative": {
                 "en": (
-                    "The new tennis ball is pushed at 1.28 m/s along the "
-                    "table, runs off the lip, drops to the rug and lands on "
-                    "the old tennis ball waiting there. The old tennis ball "
-                    "is driven 0.30 m along the floor; the new one ends 0.88 "
-                    "m from where it started."
+                    "The big marble, 100 mm across, is rolled at 1.31 m/s "
+                    "along the bar table into the small marble, 50 mm across, "
+                    "sitting near the far end. Both are the same glass, so "
+                    "the small marble is an eighth of the mass: the impact "
+                    "sends it 0.68 m forward while the big marble carries on "
+                    "for 0.89 m in all."
                 ),
                 "zh": (
-                    "新网球以 1.28 m/s 被推过桌面,滚出桌沿掉到地毯上,"
-                    "砸在等在那里的旧网球上。旧网球被推出 0.30 m;新网球相"
-                    "对起点移动 0.88 m。"
+                    "100 mm 的大玻璃球以 1.31 m/s 沿吧台滚向停在"
+                    "远端的 50 mm 小玻璃球。两球是同一种玻璃,小玻璃球质量"
+                    "只有八分之一:撞击把它送出 0.68 m,大玻璃球则继续前进"
+                    ",全程 0.89 m。"
                 ),
             },
         },
@@ -401,13 +423,13 @@ def main() -> None:
         source_record["status"] = "skipped_existing"
         source_record["outputs"] = standardize_render_outputs(source_dir, has_overrides=False)
     elif args.dry_run:
-        render_case(args, case_dir=source_dir, seed=11001, overrides_path=None,
+        render_case(args, case_dir=source_dir, seed=17001, overrides_path=None,
                     duration_sec=float(args.duration_sec))
         source_record["status"] = "dry_run"
     else:
         t0 = time.perf_counter()
         print(f"[suite] render source {SOURCE_CASE_ID}")
-        render_case(args, case_dir=source_dir, seed=11001, overrides_path=None,
+        render_case(args, case_dir=source_dir, seed=17001, overrides_path=None,
                     duration_sec=float(args.duration_sec))
         source_record["outputs"] = standardize_render_outputs(source_dir, has_overrides=False)
         source_record["elapsed_sec"] = round(time.perf_counter() - t0, 3)

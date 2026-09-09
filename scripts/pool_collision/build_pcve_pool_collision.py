@@ -182,28 +182,6 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "handing its speed to another ball."
         ),
     ),
-    # The one edit in this suite that does not hold for the whole clip, and
-    # deliberately the same DELETE as the case above: they differ by the AT
-    # FRAME clause alone. Taking the target away *after* it has been struck is
-    # what makes the timing carry information -- removing it beforehand would
-    # leave the cue's path identical to the whole-clip version.
-    EditCase(
-        case_id="edit_remove_target_ball_after_impact",
-        source_case_id=SOURCE_CASE_ID,
-        seed=9107,
-        dsl="DELETE target_ball AT FRAME 18",
-        edit_summary=(
-            "Target ball removed at frame 18, five frames after the cue "
-            "strikes it at frame 13. Frames 1-17 are the source video frame "
-            "for frame, the impact included: the cue hands its speed over and "
-            "stops dead at y=-0.10, and the target is already 0.14 m up the "
-            "table when it disappears. Nothing moves for the rest of the clip. "
-            "The whole-clip version of the same delete "
-            "(edit_remove_target_ball) is a different video again: with no "
-            "target to hit, the cue never stops -- at frame 18 it is at "
-            "y=+0.08 still doing 0.92 m/s, and it runs on to the far cushion."
-        ),
-    ),
 )
 
 

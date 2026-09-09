@@ -150,27 +150,6 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "baseline's 0.89 m -- and never hits anything."
         ),
     ),
-    # The one edit in this suite that does not hold for the whole clip, and
-    # deliberately the same DELETE as edit_remove_small_marble: they differ by
-    # the AT FRAME clause alone. Taking the small marble away after it has
-    # been struck is what makes the timing readable -- removing it beforehand
-    # leaves the big marble with nothing to slow it.
-    EditCase(
-        case_id="edit_remove_small_marble_after_impact",
-        source_case_id=SOURCE_CASE_ID,
-        seed=8107,
-        dsl="DELETE small_marble AT FRAME 19",
-        edit_summary=(
-            "Small marble removed at frame 19, four frames after the big one "
-            "strikes it at frame 15. Frames 1-18 are the source video frame "
-            "for frame, impact included: the big marble arrives at 0.85 m/s "
-            "and leaves at 0.66, and the small one is 0.22 m along and still "
-            "rolling when it disappears. The big marble then coasts to rest "
-            "at x=+0.27 exactly as in the source. The whole-clip version of "
-            "the same delete is a different video again: with nothing to hit, "
-            "the big marble keeps its speed and runs on to x=+0.39."
-        ),
-    ),
 )
 
 

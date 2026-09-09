@@ -148,6 +148,28 @@ EDIT_CASES: tuple[EditCase, ...] = (
             "unobstructed for 1.18 m before friction stops it."
         ),
     ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as edit_remove_target_ball: they differ by
+    # the AT FRAME clause alone. Taking the target away after it has been
+    # struck is what makes the timing readable -- removing it beforehand
+    # leaves the rolling ball nothing to hit when it lands.
+    EditCase(
+        case_id="edit_remove_target_ball_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=7107,
+        dsl="DELETE target_ball AT FRAME 30",
+        edit_summary=(
+            "Target ball removed at frame 30, eight frames after the rolling "
+            "ball lands off the table and strikes it at frame 22. Frames 1-29 "
+            "are the source video frame for frame, impact included: the "
+            "rolling ball is knocked back from 3.2 m/s to 0.8, and the target "
+            "has been driven from x=-0.73 to -0.98 when it disappears. The "
+            "rolling ball then settles at x=-0.42 exactly as in the source. "
+            "The whole-clip version of the same delete is a different video "
+            "again: with nothing on the floor to hit, it lands and runs on to "
+            "x=-0.86."
+        ),
+    ),
 )
 
 

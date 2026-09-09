@@ -1,27 +1,24 @@
-"""Build the table_drop_collision PCVE suite.
+"""Build the pool_collision PCVE suite.
 
 Each edit is declared as a single ``edit_dsl`` string. Prompts (precise +
 vague, zh + en), scenario overrides, and the physics diff for the manifest
 are all derived from that one string.
 
-The scene: a "new" tennis ball rolls off a coffee table, arcs to the floor,
-and strikes an "old" tennis ball waiting on the rug in line with the lane.
-At baseline the rolling ball leaves the lip at 1.05 m/s, lands 0.67 m out,
-and the head-on hit sends the target 0.30 m west while the rolling ball is
-kicked back 0.74 m east. Every value below was picked by sweeping
-simulate_table_drop_collision.py directly; the numbers in each edit_summary
-are that sweep's output at the suite's defaults.
+The scene: two identical billiard balls on a pool table felt. The cue ball
+is given a straight +Y push at 1.0 m/s and hits the target ball head-on;
+at baseline the cue stops dead on contact and the target rolls forward
+0.12 m before friction brings it to rest. Every value below was picked
+by sweeping simulate_pool_collision.py directly; the numbers in each
+edit_summary are that sweep's output at the suite's defaults.
 
-Notes on the edit surface:
-- Only the target ball can be DELETEd. The rolling ball is the trigger
-  that drives the whole simulation (the sim is not built to run without
-  it), so a DELETE on it is not exposed.
-- The rolling ball is the only one with a non-zero baseline velocity, so
-  `initial_velocity` is bound only on it (via launch_speed).
-- 3+ different push-speed cases were surveyed; the sim's high-substep
-  contact starts to miss above 1.5 m/s (fast rolling ball passes over the
-  target), so the "hard break" analogue is not in the suite -- only the
-  soft-push (miss) direction is.
+Three of the cases are ADD edits, which put a third ball -- the yellow
+one-ball, hidden in the table model until an edit calls for it -- somewhere
+on the cue-to-target line. Their positions are stated the way the scene reads
+rather than in table coordinates: a point on the line between two balls, so
+many ball-radii from one of them. All three turn the head-on shot into a
+relay; where the new ball sits decides whether the two impacts land on the
+same frame or a dozen frames apart, which is the thing the edit is asking a
+model to get right.
 """
 
 from __future__ import annotations
@@ -36,15 +33,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))          # this scene
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))      # scripts root
 import pcve_edit_dsl as dsl  # noqa: E402
 import edit_vocab             # noqa: E402
 
 
 WORKSPACE_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_BLENDER = WORKSPACE_DIR / "tools" / "blender-3.6.23-linux-x64" / "blender"
-RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "table_drop_collision" / "render_table_drop_collision.py"
+RENDER_SCRIPT = WORKSPACE_DIR / "scripts" / "pool_collision" / "render_pool_collision.py"
 
 
 VOCAB = edit_vocab.VOCAB
@@ -61,91 +58,150 @@ class EditCase:
     seed: int
     dsl: str
     edit_summary: str
-    # Optional per-case override of the suite's default duration; unused now
-    # (was 3.4s for a few edits where the ball keeps rolling past the shot).
-    duration_sec: float | None = None
 
 
-SOURCE_CASE_ID = "table_drop_collision_baseline"
+SOURCE_CASE_ID = "pool_collision_baseline"
 
 
 EDIT_CASES: tuple[EditCase, ...] = (
     EditCase(
-        case_id="edit_heavy_rolling_ball",
+        case_id="edit_heavy_cue_ball",
         source_case_id=SOURCE_CASE_ID,
-        seed=11101,
-        dsl="SET rolling_ball.mass TIMES 5",
+        seed=9101,
+        dsl="SET cue_ball.mass TIMES 5",
         edit_summary=(
-            "Rolling ball made 5x heavier. The impact now carries much more "
-            "momentum into the target: it rockets 1.64 m across the floor "
-            "(5x the baseline's 0.30 m), and the rolling ball keeps driving "
-            "on behind it, ending 0.98 m past the lip instead of 0.74 m."
-        ),
-    ),
-    EditCase(
-        case_id="edit_light_rolling_ball",
-        source_case_id=SOURCE_CASE_ID,
-        seed=11102,
-        dsl="SET rolling_ball.mass TIMES 0.25",
-        edit_summary=(
-            "New tennis ball made four times lighter. It still lands on "
-            "the old one but bounces off it rather than driving it: the "
-            "old ball barely moves, 0.03 m against the baseline's 0.30 m, "
-            "and the light ball comes to rest 0.52 m from its start "
-            "instead of 0.88 m."
+            "Cue ball made 5x heavier. The head-on hit no longer swaps "
+            "velocities cleanly: the cue drives on behind the target rather "
+            "than stopping dead, keeping 0.27 m/s while the target leaves at "
+            "0.48 m/s. Both balls end farther down the table than in the "
+            "baseline (cue displacement 1.05 m, target 0.74 m vs 0.50 m and "
+            "0.62 m at baseline)."
         ),
     ),
     EditCase(
         case_id="edit_heavy_target_ball",
         source_case_id=SOURCE_CASE_ID,
-        seed=11103,
-        dsl="SET target_ball.mass TIMES 5",
+        seed=9102,
+        dsl="SET target_ball.mass TIMES 10",
         edit_summary=(
-            "Target ball made 5x heavier. The rolling ball hits a wall of "
-            "mass and rebounds backward -- ending up EAST of the lip "
-            "instead of west of it -- and the target only creeps 0.02 m "
-            "instead of the baseline's 0.30 m."
+            "Target ball made 10x heavier. The cue bounces back off it and "
+            "the target barely reacts: cue displacement 0.26 m (much of that "
+            "backwards after the rebound), target displacement 0.11 m. Cue "
+            "keeps 0.32 m/s after the collision; the target ends at rest."
         ),
     ),
     EditCase(
-        case_id="edit_soft_push",
+        case_id="edit_hard_break",
         source_case_id=SOURCE_CASE_ID,
-        seed=11104,
-        dsl="SET rolling_ball.initial_velocity TIMES 0.6",
+        seed=9103,
+        dsl="SET cue_ball.initial_velocity TIMES 4",
         edit_summary=(
-            "New tennis ball pushed more gently across the table. It "
-            "reaches the lip at lower speed, is thrown less far off the "
-            "edge, and lands short of the old ball -- no contact at all. "
-            "The old ball stays exactly where it started, where the "
-            "baseline moves it 0.30 m; the new ball bounces its way out "
-            "across the floor alone, nine hops against the baseline's "
-            "five."
+            "Cue ball's break speed 4x faster (1.0 -> 4.0 m/s along the "
+            "table). Contact happens by frame 4 instead of 13, and the "
+            "target rockets away at 1.23 m/s -- more than 2.5x the "
+            "baseline's post-collision target speed -- ending up 0.67 m "
+            "down the table before the wall stops it."
         ),
     ),
     EditCase(
-        case_id="edit_dead_rolling_ball",
+        case_id="edit_grippy_cue_ball",
         source_case_id=SOURCE_CASE_ID,
-        seed=11105,
-        dsl="SET rolling_ball.restitution TIMES 0.1",
+        seed=9104,
+        dsl="SET cue_ball.friction TIMES 10",
         edit_summary=(
-            "New tennis ball's restitution killed. Its floor bounce and "
-            "its impact against the old ball both go inelastic: it stops "
-            "bouncing entirely -- no hops against the baseline's five -- "
-            "and the pair sticks rather than transferring cleanly. The "
-            "old ball moves only 0.12 m instead of 0.30 m, while the new "
-            "one drives on to 1.09 m from its start against 0.88 m."
+            "Cue ball's friction 10x -- both lateral and rolling coefficients "
+            "scale together. The felt now drags the cue to a stop before it "
+            "ever reaches the target: cue displacement 0.42 m (short of the "
+            "0.6 m gap), no contact, the target never moves."
+        ),
+    ),
+    EditCase(
+        case_id="edit_remove_cue_ball",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9105,
+        dsl="DELETE cue_ball",
+        edit_summary=(
+            "Cue ball removed. Nothing strikes the target; it sits alone on "
+            "the felt for the whole shot. No motion, no collision."
+        ),
+    ),
+    EditCase(
+        case_id="edit_add_ball_near_cue",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9107,
+        dsl="ADD yellow_ball BETWEEN cue_ball AND target_ball AT 1/4 FROM cue_ball",
+        edit_summary=(
+            "A yellow one-ball placed at the quarter point of the "
+            "cue-to-target line nearest the cue. The cue reaches it on "
+            "frame 3 and stops there having moved only 0.12 m; the yellow "
+            "ball inherits the shot, runs 0.41 m down the felt and "
+            "reaches the target on frame 14. The target ends up 0.32 m "
+            "along, well past the baseline's 0.12 m, because the handoff "
+            "happens before the felt has taken much off the roll."
+        ),
+    ),
+    EditCase(
+        case_id="edit_add_ball_midway",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9108,
+        dsl="ADD yellow_ball BETWEEN cue_ball AND target_ball AT MIDPOINT",
+        edit_summary=(
+            "A yellow one-ball placed at the midpoint of the "
+            "cue-to-target line. The shot becomes an even three-stage "
+            "relay: the cue reaches it on frame 7, it reaches the target "
+            "on frame 14, and each ball stops roughly where the next one "
+            "started -- 0.27 m, 0.26 m and 0.31 m of travel. The clear "
+            "coast between the two impacts is what separates this from "
+            "the near-target case."
+        ),
+    ),
+    EditCase(
+        case_id="edit_add_ball_near_target",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9109,
+        dsl="ADD yellow_ball BETWEEN cue_ball AND target_ball AT 1/4 FROM target_ball",
+        edit_summary=(
+            "A yellow one-ball placed at the quarter point of the "
+            "cue-to-target line nearest the target. The cue runs most of "
+            "its baseline distance, 0.42 m, before it arrives, and the "
+            "two impacts land within a frame of each other -- the second "
+            "on frame 13 -- so it reads as a single crack rather than a "
+            "relay. The yellow ball, blocked immediately by the target, "
+            "shifts only 0.12 m while the target goes 0.31 m."
         ),
     ),
     EditCase(
         case_id="edit_remove_target_ball",
         source_case_id=SOURCE_CASE_ID,
-        seed=11106,
+        seed=9106,
         dsl="DELETE target_ball",
         edit_summary=(
-            "Target ball removed. The rolling ball leaves the table and "
-            "lands on the rug exactly where the baseline predicts -- "
-            "(-0.67, -0.29) -- and, with nothing to strike, rolls on "
-            "unobstructed for 1.18 m before friction stops it."
+            "Target ball removed. The cue rolls unobstructed the length of "
+            "the table (~1.21 m of travel) and is still moving at 0.56 m/s "
+            "when the shot ends, having reached the far cushion instead of "
+            "handing its speed to another ball."
+        ),
+    ),
+    # The one edit in this suite that does not hold for the whole clip, and
+    # deliberately the same DELETE as the case above: they differ by the AT
+    # FRAME clause alone. Taking the target away *after* it has been struck is
+    # what makes the timing carry information -- removing it beforehand would
+    # leave the cue's path identical to the whole-clip version.
+    EditCase(
+        case_id="edit_remove_target_ball_after_impact",
+        source_case_id=SOURCE_CASE_ID,
+        seed=9107,
+        dsl="DELETE target_ball AT FRAME 18",
+        edit_summary=(
+            "Target ball removed at frame 18, five frames after the cue "
+            "strikes it at frame 13. Frames 1-17 are the source video frame "
+            "for frame, the impact included: the cue hands its speed over and "
+            "stops dead at y=-0.10, and the target is already 0.14 m up the "
+            "table when it disappears. Nothing moves for the rest of the clip. "
+            "The whole-clip version of the same delete "
+            "(edit_remove_target_ball) is a different video again: with no "
+            "target to hit, the cue never stops -- at frame 18 it is at "
+            "y=+0.08 still doing 0.92 m/s, and it runs on to the far cushion."
         ),
     ),
 )
@@ -156,20 +212,18 @@ EDIT_CASES: tuple[EditCase, ...] = (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build the table_drop_collision PCVE suite (1 source + N edits)."
+        description="Build the pool_collision PCVE suite (1 source + N edits)."
     )
     parser.add_argument(
         "--out-root",
         type=Path,
-        default=WORKSPACE_DIR / "renders" / "pcve_table_drop_collision_suite",
+        default=WORKSPACE_DIR / "renders" / "pcve_pool_collision_suite",
     )
     parser.add_argument("--blender", type=Path, default=DEFAULT_BLENDER)
     parser.add_argument("--resolution", nargs=2, type=int, default=(1280, 720))
     parser.add_argument("--fps", type=int, default=24)
-    parser.add_argument("--duration-sec", type=float, default=4.0,
-                        help="Default clip length; edits that leave the ball "
-                             "still running override this per-case.")
-    parser.add_argument("--samples", type=int, default=64)
+    parser.add_argument("--duration-sec", type=float, default=4.0)
+    parser.add_argument("--samples", type=int, default=32)
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -196,7 +250,6 @@ def render_command(
     *,
     case_dir: Path,
     overrides_path: Path | None,
-    duration_sec: float,
 ) -> list[str]:
     cmd = [
         str(args.blender.expanduser().resolve()),
@@ -208,7 +261,7 @@ def render_command(
         "--out-dir", str(case_dir.resolve()),
         "--resolution", str(int(args.resolution[0])), str(int(args.resolution[1])),
         "--fps", str(int(args.fps)),
-        "--duration-sec", str(float(duration_sec)),
+        "--duration-sec", str(float(args.duration_sec)),
         "--samples", str(int(args.samples)),
         "--device", str(args.device),
         "--seed", str(int(seed)),
@@ -219,7 +272,7 @@ def render_command(
 
 
 def standardize_render_outputs(case_dir: Path, *, has_overrides: bool) -> dict[str, str]:
-    video_source = case_dir / "table_drop_collision.mp4"
+    video_source = case_dir / "pool_collision.mp4"
     if not video_source.exists():
         candidates = sorted(case_dir.glob("*.mp4"))
         if not candidates:
@@ -248,10 +301,9 @@ def render_case(
     case_dir: Path,
     seed: int,
     overrides_path: Path | None,
-    duration_sec: float,
 ) -> None:
     case_dir.mkdir(parents=True, exist_ok=True)
-    cmd = render_command(args, seed, case_dir=case_dir, overrides_path=overrides_path, duration_sec=duration_sec)
+    cmd = render_command(args, seed, case_dir=case_dir, overrides_path=overrides_path)
     if args.dry_run:
         print(" ".join(cmd))
         return
@@ -274,6 +326,15 @@ def build_edit_record(case: EditCase) -> dict[str, Any]:
     if isinstance(parsed, dsl.SetEdit):
         diff = {f"{parsed.property_name} ({parsed.object_id})":
                 {"from": dsl.baseline_value_for(parsed, VOCAB), "to": parsed.to_value}}
+    elif isinstance(parsed, dsl.AddEdit):
+        diff = {parsed.object_id: {
+            "from": "absent",
+            "to": "present",
+            # Both halves: the division point the edit was written as, and the
+            # centre it resolves to, so a consumer can score a predicted
+            # placement without re-running the resolver.
+            "position": dsl.add_position_diff(parsed, VOCAB),
+        }}
     else:
         diff = {parsed.object_id: {"from": "present", "to": "removed"}}
     diff["timing"] = dsl.timing_diff(parsed, VOCAB)
@@ -338,14 +399,12 @@ def main() -> None:
     manifest_path = args.out_root / "suite_manifest.json"
     manifest: dict[str, Any] = {
         "schema_version": 3,
-        "suite_name": "pcve_table_drop_collision_suite",
+        "suite_name": "pcve_pool_collision_suite",
         "description": (
-            "One source table-drop head-on-collision video plus N edited "
-            "variants. A tennis ball rolls off a coffee table onto a second "
-            "tennis ball on the floor. Each edit is declared with a single "
-            "edit-DSL string; prompts (precise + vague, zh + en), scenario "
-            "overrides, and the physics diff are all derived from that one "
-            "string."
+            "One source pool head-on-collision video plus N edited variants. "
+            "Each edit is declared with a single edit-DSL string; prompts "
+            "(precise + vague, zh + en), scenario overrides, and the physics "
+            "diff are all derived from that one string."
         ),
         "baseline_physics": BASELINE_PHYSICS,
         "total_frames": edit_vocab.TOTAL_FRAMES,
@@ -366,27 +425,27 @@ def main() -> None:
         "description": {
             "vague": {
                 "en": (
-                    "The new tennis ball is pushed along the table, runs off "
-                    "the lip and drops to the rug, landing on the old tennis "
-                    "ball waiting there and driving it along the floor."
+                    "The cue ball is pushed along the felt at the target ball "
+                    "and hits it head-on. The cue ball stops dead on contact "
+                    "and the target ball rolls forward before friction brings "
+                    "it to rest."
                 ),
                 "zh": (
-                    "新网球被推过桌面,滚出桌沿掉到地毯上,砸在等在那里的旧网球上"
-                    "并把它推走一段。"
+                    "母球沿台面被推向目标球并正面撞上。母球接触瞬间停死,目标球向"
+                    "前滚一段后被摩擦停住。"
                 ),
             },
             "quantitative": {
                 "en": (
-                    "The new tennis ball is pushed at 1.28 m/s along the "
-                    "table, runs off the lip, drops to the rug and lands on "
-                    "the old tennis ball waiting there. The old tennis ball "
-                    "is driven 0.30 m along the floor; the new one ends 0.88 "
-                    "m from where it started."
+                    "The cue ball is pushed at 1.0 m/s and hits the target "
+                    "ball head-on on frame 15 after 0.57 m of travel. The cue "
+                    "ball stops dead on contact and the target ball rolls "
+                    "forward 0.12 m before friction brings it to rest."
                 ),
                 "zh": (
-                    "新网球以 1.28 m/s 被推过桌面,滚出桌沿掉到地毯上,"
-                    "砸在等在那里的旧网球上。旧网球被推出 0.30 m;新网球相"
-                    "对起点移动 0.88 m。"
+                    "母球以 1.0 m/s 被推出,滚过 0.57 m 后在第 "
+                    "15 帧正撞上目标球。母球接触瞬间停死,目标球向前滚 0.1"
+                    "2 m 后被摩擦停住。"
                 ),
             },
         },
@@ -401,14 +460,12 @@ def main() -> None:
         source_record["status"] = "skipped_existing"
         source_record["outputs"] = standardize_render_outputs(source_dir, has_overrides=False)
     elif args.dry_run:
-        render_case(args, case_dir=source_dir, seed=11001, overrides_path=None,
-                    duration_sec=float(args.duration_sec))
+        render_case(args, case_dir=source_dir, seed=9001, overrides_path=None)
         source_record["status"] = "dry_run"
     else:
         t0 = time.perf_counter()
         print(f"[suite] render source {SOURCE_CASE_ID}")
-        render_case(args, case_dir=source_dir, seed=11001, overrides_path=None,
-                    duration_sec=float(args.duration_sec))
+        render_case(args, case_dir=source_dir, seed=9001, overrides_path=None)
         source_record["outputs"] = standardize_render_outputs(source_dir, has_overrides=False)
         source_record["elapsed_sec"] = round(time.perf_counter() - t0, 3)
         source_record["status"] = "completed"
@@ -425,14 +482,11 @@ def main() -> None:
         write_json(overrides_path, overrides_payload)
         prompts_path = write_prompt_file(case_dir, case, edit_info)
 
-        duration_sec = case.duration_sec if case.duration_sec is not None else float(args.duration_sec)
-
         record: dict[str, Any] = {
             "case_id": case.case_id,
             "kind": "edit",
             "source_case_id": case.source_case_id,
             "seed": case.seed,
-            "duration_sec": duration_sec,
             "case_dir": str(case_dir.resolve()),
             "scenario_overrides_json": str(overrides_path.resolve()),
             "prompts_json": str(prompts_path.resolve()),
@@ -455,8 +509,7 @@ def main() -> None:
             continue
 
         if args.dry_run:
-            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path,
-                        duration_sec=duration_sec)
+            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path)
             record["status"] = "dry_run"
             write_json(manifest_path, manifest)
             continue
@@ -464,8 +517,7 @@ def main() -> None:
         t0 = time.perf_counter()
         print(f"[suite] render edit {case.case_id}")
         try:
-            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path,
-                        duration_sec=duration_sec)
+            render_case(args, case_dir=case_dir, seed=case.seed, overrides_path=overrides_path)
         except subprocess.CalledProcessError:
             record["status"] = "failed"
             record["elapsed_sec"] = round(time.perf_counter() - t0, 3)
