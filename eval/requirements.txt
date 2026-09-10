@@ -1,0 +1,19 @@
+# Metrics (all baselines)
+imageio[ffmpeg]>=2.34
+imageio-ffmpeg>=0.5
+numpy>=1.26
+Pillow>=10
+av>=12
+lpips>=0.1.4
+open_clip_torch>=2.24
+torchmetrics>=1.4
+
+# Baselines: only needed if you actually run wan_vace (or any diffusers baseline)
+# torch>=2.4                      # install matching your CUDA
+# diffusers>=0.33                 # Wan 2.1 VACE integration landed around here
+# transformers>=4.44
+# accelerate>=0.34
+# safetensors>=0.4
+
+# GroundingDINO for the tracker's text-based seeding (physics metric)
+transformers>=4.44

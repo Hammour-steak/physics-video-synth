@@ -1,0 +1,664 @@
+{
+  "_comment": "Click points identifying the object each DELETE edit removes, in SOURCE video pixel coordinates (1280x720). VOID's stage1 takes the bounding box of these points (plus 10% margin) as SAM2's box prompt, so a single point gives a zero-area box and segments nothing -- the points must span the object, which is what point_selector_gui.py produces when a person clicks around it.",
+  "air_hockey_chain/edit_remove_middle_mallet_mid_slide": {
+    "primary_points": [
+      [
+        631,
+        342
+      ],
+      [
+        631,
+        379
+      ],
+      [
+        609,
+        360
+      ],
+      [
+        654,
+        360
+      ]
+    ],
+    "first_appears_frame": 22,
+    "object_text": "red air hockey mallet",
+    "note": "partway DELETE: first_appears_frame is the edit frame (applies_from_frame), i.e. where removal starts"
+  },
+  "air_hockey_chain/edit_remove_middle_mallet": {
+    "primary_points": [
+      [
+        710,
+        318
+      ],
+      [
+        710,
+        357
+      ],
+      [
+        689,
+        337
+      ],
+      [
+        734,
+        337
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "red air hockey mallet"
+  },
+  "air_hockey_chain/edit_remove_last_mallet": {
+    "primary_points": [
+      [
+        534,
+        386
+      ],
+      [
+        534,
+        421
+      ],
+      [
+        509,
+        404
+      ],
+      [
+        560,
+        404
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "white air hockey mallet"
+  },
+  "ball_block/edit_remove_block": {
+    "primary_points": [
+      [
+        685,
+        305
+      ],
+      [
+        685,
+        508
+      ],
+      [
+        556,
+        405
+      ],
+      [
+        815,
+        405
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "wooden block"
+  },
+  "ball_block/edit_remove_block_after_impact": {
+    "primary_points": [
+      [
+        810,
+        310
+      ],
+      [
+        810,
+        528
+      ],
+      [
+        678,
+        415
+      ],
+      [
+        943,
+        415
+      ]
+    ],
+    "first_appears_frame": 17,
+    "object_text": "wooden block"
+  },
+  "ball_box_rebound/edit_remove_target": {
+    "primary_points": [
+      [
+        500,
+        400
+      ],
+      [
+        500,
+        528
+      ],
+      [
+        433,
+        463
+      ],
+      [
+        567,
+        463
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "black and white soccer ball"
+  },
+  "ball_box_rebound/edit_remove_target_after_impact": {
+    "primary_points": [
+      [
+        508,
+        455
+      ],
+      [
+        508,
+        612
+      ],
+      [
+        422,
+        530
+      ],
+      [
+        598,
+        530
+      ]
+    ],
+    "first_appears_frame": 32,
+    "object_text": "black and white soccer ball"
+  },
+  "dining_chain/edit_remove_cup": {
+    "primary_points": [
+      [
+        497,
+        310
+      ],
+      [
+        497,
+        406
+      ],
+      [
+        474,
+        360
+      ],
+      [
+        523,
+        360
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "yellow striped paper cup"
+  },
+  "dining_chain/edit_remove_milk": {
+    "primary_points": [
+      [
+        853,
+        322
+      ],
+      [
+        853,
+        405
+      ],
+      [
+        832,
+        362
+      ],
+      [
+        875,
+        362
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "milk carton"
+  },
+  "dining_chain/edit_remove_cup_mid_slide": {
+    "primary_points": [
+      [
+        806,
+        310
+      ],
+      [
+        806,
+        405
+      ],
+      [
+        784,
+        362
+      ],
+      [
+        831,
+        362
+      ]
+    ],
+    "first_appears_frame": 10,
+    "object_text": "yellow striped paper cup"
+  },
+  "domino_chain/edit_remove_domino_1": {
+    "primary_points": [
+      [
+        357,
+        185
+      ],
+      [
+        357,
+        490
+      ],
+      [
+        297,
+        336
+      ],
+      [
+        418,
+        336
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "first (leftmost, pre-tilted) domino"
+  },
+  "domino_chain/edit_remove_domino_1_mid_fall": {
+    "primary_points": [
+      [
+        320,
+        472
+      ],
+      [
+        525,
+        232
+      ],
+      [
+        400,
+        390
+      ],
+      [
+        450,
+        320
+      ]
+    ],
+    "first_appears_frame": 24,
+    "object_text": "first domino, mid-fall against the second"
+  },
+  "domino_chain/edit_remove_domino_2": {
+    "primary_points": [
+      [
+        542,
+        180
+      ],
+      [
+        542,
+        487
+      ],
+      [
+        510,
+        330
+      ],
+      [
+        576,
+        330
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "second domino from the left"
+  },
+  "domino_chain/edit_remove_domino_3": {
+    "primary_points": [
+      [
+        741,
+        180
+      ],
+      [
+        741,
+        508
+      ],
+      [
+        714,
+        340
+      ],
+      [
+        768,
+        340
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "third domino from the left"
+  },
+  "domino_chain/edit_remove_domino_4": {
+    "primary_points": [
+      [
+        934,
+        180
+      ],
+      [
+        934,
+        512
+      ],
+      [
+        898,
+        340
+      ],
+      [
+        971,
+        340
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "fourth (rightmost) domino"
+  },
+  "mahjong_dice/edit_remove_red_die": {
+    "primary_points": [
+      [
+        616,
+        68
+      ],
+      [
+        616,
+        130
+      ],
+      [
+        582,
+        98
+      ],
+      [
+        651,
+        98
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "red die"
+  },
+  "mahjong_dice/edit_remove_white_die": {
+    "primary_points": [
+      [
+        662,
+        12
+      ],
+      [
+        662,
+        80
+      ],
+      [
+        629,
+        45
+      ],
+      [
+        696,
+        45
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "white die"
+  },
+  "picnic_apple_ball/edit_remove_apple": {
+    "primary_points": [
+      [
+        675,
+        37
+      ],
+      [
+        675,
+        74
+      ],
+      [
+        653,
+        55
+      ],
+      [
+        697,
+        55
+      ]
+    ],
+    "first_appears_frame": 9,
+    "object_text": "red apple falling in from the top of frame"
+  },
+  "picnic_apple_ball/edit_remove_soccer_ball": {
+    "primary_points": [
+      [
+        625,
+        353
+      ],
+      [
+        625,
+        452
+      ],
+      [
+        572,
+        403
+      ],
+      [
+        678,
+        403
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "soccer ball on the grass"
+  },
+  "picnic_apple_ball/edit_remove_apple_after_impact": {
+    "primary_points": [
+      [
+        861,
+        408
+      ],
+      [
+        861,
+        445
+      ],
+      [
+        843,
+        426
+      ],
+      [
+        879,
+        426
+      ]
+    ],
+    "first_appears_frame": 18,
+    "object_text": "red apple on the grass"
+  },
+  "pool_collision/edit_remove_cue_ball": {
+    "primary_points": [
+      [
+        415,
+        470
+      ],
+      [
+        443,
+        470
+      ],
+      [
+        429,
+        456
+      ],
+      [
+        429,
+        484
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "white cue ball"
+  },
+  "pool_collision/edit_remove_target_ball": {
+    "primary_points": [
+      [
+        628,
+        349
+      ],
+      [
+        648,
+        349
+      ],
+      [
+        638,
+        339
+      ],
+      [
+        638,
+        359
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "black billiard ball"
+  },
+  "ramp_collision/edit_remove_blue_marble": {
+    "primary_points": [
+      [
+        121,
+        410
+      ],
+      [
+        121,
+        478
+      ],
+      [
+        89,
+        443
+      ],
+      [
+        154,
+        443
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "blue marble"
+  },
+  "table_drop_collision/edit_remove_target_ball": {
+    "primary_points": [
+      [
+        331,
+        449
+      ],
+      [
+        331,
+        493
+      ],
+      [
+        306,
+        471
+      ],
+      [
+        357,
+        471
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "tennis ball resting on the floor"
+  },
+  "table_marble_collision/edit_remove_small_marble": {
+    "primary_points": [
+      [
+        656,
+        346
+      ],
+      [
+        656,
+        387
+      ],
+      [
+        635,
+        366
+      ],
+      [
+        677,
+        366
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "small teal marble"
+  },
+  "toy_car_ball/edit_remove_toy_ball": {
+    "primary_points": [
+      [
+        684,
+        103
+      ],
+      [
+        684,
+        176
+      ],
+      [
+        649,
+        139
+      ],
+      [
+        720,
+        139
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "yellow toy ball with a red star"
+  },
+  "toy_car_ball/edit_remove_toy_ball_after_push": {
+    "primary_points": [
+      [
+        684,
+        103
+      ],
+      [
+        684,
+        176
+      ],
+      [
+        649,
+        139
+      ],
+      [
+        720,
+        139
+      ]
+    ],
+    "first_appears_frame": 18,
+    "object_text": "yellow toy ball with a red star"
+  },
+  "twin_ramp_collision/edit_remove_purple_ball": {
+    "primary_points": [
+      [
+        1145,
+        266
+      ],
+      [
+        1145,
+        314
+      ],
+      [
+        1122,
+        290
+      ],
+      [
+        1169,
+        290
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "purple marble"
+  },
+  "twin_ramp_collision/edit_remove_yellow_ball": {
+    "primary_points": [
+      [
+        138,
+        272
+      ],
+      [
+        138,
+        316
+      ],
+      [
+        116,
+        294
+      ],
+      [
+        161,
+        294
+      ]
+    ],
+    "first_appears_frame": 0,
+    "object_text": "yellow marble"
+  },
+  "twin_ramp_collision/edit_remove_purple_ball_after_impact": {
+    "primary_points": [
+      [
+        747,
+        324
+      ],
+      [
+        747,
+        371
+      ],
+      [
+        723,
+        348
+      ],
+      [
+        773,
+        348
+      ]
+    ],
+    "first_appears_frame": 39,
+    "object_text": "purple marble"
+  }
+}

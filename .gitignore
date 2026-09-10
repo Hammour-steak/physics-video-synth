@@ -10,3 +10,8 @@ __pycache__/
 *.blend1
 *.part
 .DS_Store
+
+# eval runtime caches
+eval/metrics/gt_tracks_gsam2/
+eval/logs/
+eval/precompute.log
