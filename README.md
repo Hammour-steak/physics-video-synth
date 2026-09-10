@@ -114,12 +114,72 @@ predictions/wan_vace_14b/
 | Category | Metrics |
 |----------|---------|
 | Perceptual | PSNR, SSIM, LPIPS, CLIP similarity, FVD |
-| Physics | Per-object trajectory error (px & radii), `gap_closed`, removal accuracy, onset error, placement error (ADD) |
+| Physics | Trajectory displacement (`disp`), Gap Closed (`gap_closed`), Mask IoU (`mask_iou`) |
 
-`gap_closed` is the primary physics metric: 1.0 = perfect match to the
-edited render, 0.0 = indistinguishable from replaying the unedited source.
+#### Trajectory Displacement
 
-See [eval/README.md](eval/README.md) for detailed metric descriptions.
+Every object in each scene is tracked independently by GroundedSAM2 in both
+the prediction and the edited ground-truth video. The per-object trajectory
+error is computed as displacement from an anchor frame, which cancels the
+constant offset between a mask centroid and the object's true origin:
+
+```
+disp(t) = ‖(pred(t) - pred(anchor)) - (ref(t) - ref(anchor))‖
+```
+
+where `pred(t)` and `ref(t)` are the tracked centroid positions in pixels at
+frame `t`. The anchor is the first frame the object is fully inside the image
+after its seed frame. Errors are reported in both pixels (`disp_mean_px`) and
+object radii (`disp_mean_radii`), where the radius is the object's apparent
+size on screen, so a 16 px marble and an 84 px ball are compared on equal
+terms.
+
+Frames where the reference object leaves the image are excluded. Frames where
+the prediction's tracker lost the object but the reference is still visible are
+penalised with the reference's distance to the nearest image edge (a lower
+bound on how far off-screen the model must have driven the object).
+
+#### Gap Closed
+
+Raw pixel error is uninterpretable on its own because edits in this benchmark
+range from 15 px to 5900 px of displacement. `gap_closed` normalises against
+a null baseline -- the error a model would get by ignoring the edit prompt and
+reproducing the source clip unchanged:
+
+```
+gap_closed = 1 - Σ disp(pred) / Σ disp(null)
+```
+
+where `disp(null)` is the trajectory error of the source clip's tracked path
+against the edited ground-truth's tracked path, measured identically. The
+summation is over all scored objects in a case (not averaged per object then
+combined, which would let a barely-moved bystander with a near-zero denominator
+dominate the score).
+
+- **1.0** = the prediction perfectly matches the edited ground-truth trajectory.
+- **0.0** = the prediction is indistinguishable from replaying the unedited
+  source -- the model ignored the edit entirely.
+- **< 0** = the model made the trajectory worse than doing nothing.
+
+#### Mask IoU
+
+Per-frame spatial IoU between the prediction's and the reference's segmentation
+masks, averaged over scored frames:
+
+```
+IoU(t) = |pred_mask(t) ∩ ref_mask(t)| / |pred_mask(t) ∪ ref_mask(t)|
+mask_iou = mean(IoU(t)) over scored frames
+```
+
+Both sides are gated by a plausibility check on mask area (0.3x-3.0x the
+source clip's median area for that object) to reject spurious background masks.
+Frames where both sides show nothing are excluded rather than counted as 1.0.
+Mask IoU captures shape and spatial overlap that centroid-based trajectory
+metrics cannot -- a correct centroid with the wrong object boundary still
+scores poorly.
+
+See [eval/README.md](eval/README.md) for more details on tracking, seeding,
+and per-object scoring.
 
 ## License
 
