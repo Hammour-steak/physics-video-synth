@@ -116,67 +116,93 @@ predictions/wan_vace_14b/
 | Perceptual | PSNR, SSIM, LPIPS, CLIP similarity, FVD |
 | Physics | Trajectory displacement (`disp`), Gap Closed (`gap_closed`), Mask IoU (`mask_iou`) |
 
+The three physics metrics answer different questions:
+
+| Metric | What it tells you | Better |
+|--------|------------------|--------|
+| **Trajectory Displacement** | Does the object move as it should after the edit? | ↓ Lower; 0 is perfect motion |
+| **Gap Closed** | How much error is removed compared with copying the unedited source? | ↑ Higher; 1 is perfect, 0 is baseline |
+| **Mask IoU** | Does the object occupy the right pixels, with the right boundary? | ↑ Higher; 1 is identical masks |
+
 #### Trajectory Displacement
 
-Every object in each scene is tracked independently by GroundedSAM2 in both
-the prediction and the edited ground-truth video. The per-object trajectory
-error is computed as displacement from an anchor frame, which cancels the
-constant offset between a mask centroid and the object's true origin:
+Measures the difference in object motion after aligning each trajectory to its
+own anchor position. **Lower is better.**
 
-```
-disp(t) = ‖(pred(t) - pred(anchor)) - (ref(t) - ref(anchor))‖
-```
+$$
+d_t = \left\| \left(\mathbf{p}_t - \mathbf{p}_a\right) - \left(\mathbf{r}_t - \mathbf{r}_a\right) \right\|_2
+$$
 
-where `pred(t)` and `ref(t)` are the tracked centroid positions in pixels at
-frame `t`. The anchor is the first frame the object is fully inside the image
-after its seed frame. Errors are reported in both pixels (`disp_mean_px`) and
-object radii (`disp_mean_radii`), where the radius is the object's apparent
-size on screen, so a 16 px marble and an 84 px ball are compared on equal
-terms.
+Here $\mathbf{p}_t$ and $\mathbf{r}_t$ are the predicted and edited-reference
+centroids in pixels, tracked by GroundedSAM2. The anchor $a$ is the first valid
+tracked frame at or after the seed that passes the reference visibility gate.
+Subtracting each path's anchor removes constant positional offsets.
 
-Frames where the reference object leaves the image are excluded. Frames where
-the prediction's tracker lost the object but the reference is still visible are
-penalised with the reference's distance to the nearest image edge (a lower
-bound on how far off-screen the model must have driven the object).
+The per-object mean error over scored frames $\mathcal{T}$ is:
+
+$$
+E = \frac{1}{|\mathcal{T}|} \sum_{t \in \mathcal{T}} d_t
+$$
+
+For example, moving 80 px right when the reference moves 100 px right gives
+a **20 px** error at that frame. `disp_mean_px` reports the mean in pixels;
+`disp_mean_radii` divides it by the apparent object radius, with a minimum
+scale of 12 px.
+
+Reference frames where the object is off-screen or clipped are excluded.
+For a lost prediction track while the reference remains fully visible, $d_t$
+is replaced by the reference's distance to the nearest image edge as a penalty.
 
 #### Gap Closed
 
-Raw pixel error is uninterpretable on its own because edits in this benchmark
-range from 15 px to 5900 px of displacement. `gap_closed` normalises against
-a null baseline -- the error a model would get by ignoring the edit prompt and
-reproducing the source clip unchanged:
+Measures the fraction of trajectory error removed compared with copying the
+unedited source clip (the null baseline). **Higher is better.**
 
-```
-gap_closed = 1 - Σ disp(pred) / Σ disp(null)
-```
+$$
+\mathrm{GapClosed} = 1 - \frac{\sum_{o \in \mathcal{O}} E_o^{\mathrm{pred}}}{\sum_{o \in \mathcal{O}} E_o^{\mathrm{null}}}
+$$
 
-where `disp(null)` is the trajectory error of the source clip's tracked path
-against the edited ground-truth's tracked path, measured identically. The
-summation is over all scored objects in a case (not averaged per object then
-combined, which would let a barely-moved bystander with a near-zero denominator
-dominate the score).
+$E_o^{\mathrm{pred}}$ and $E_o^{\mathrm{null}}$ are object $o$'s mean
+displacement errors against the edited reference for the prediction and source
+clip, respectively. $\mathcal{O}$ contains scored objects with a nonzero null
+error. Errors are summed **before dividing**, so objects with tiny baseline
+errors do not dominate through their individual ratios. If no usable baseline
+denominator exists, the score is unavailable.
 
-- **1.0** = the prediction perfectly matches the edited ground-truth trajectory.
-- **0.0** = the prediction is indistinguishable from replaying the unedited
-  source -- the model ignored the edit entirely.
-- **< 0** = the model made the trajectory worse than doing nothing.
+For example, reducing the summed error from **100 px to 25 px** gives
+$1 - 25/100 = 0.75$: **75% of the gap closed**.
+
+- **1.0:** zero scored trajectory error.
+- **0.0:** the same aggregate error as copying the source.
+- **Below 0:** worse than copying the source.
 
 #### Mask IoU
 
-Per-frame spatial IoU between the prediction's and the reference's segmentation
-masks, averaged over scored frames:
+Measures spatial overlap between the predicted and edited-reference object
+masks. **Higher is better.**
 
-```
-IoU(t) = |pred_mask(t) ∩ ref_mask(t)| / |pred_mask(t) ∪ ref_mask(t)|
-mask_iou = mean(IoU(t)) over scored frames
-```
+$$
+\mathrm{IoU}_t = \frac{\left|M_t^{\mathrm{pred}} \cap M_t^{\mathrm{ref}}\right|}{\left|M_t^{\mathrm{pred}} \cup M_t^{\mathrm{ref}}\right|}
+$$
 
-Both sides are gated by a plausibility check on mask area (0.3x-3.0x the
-source clip's median area for that object) to reject spurious background masks.
-Frames where both sides show nothing are excluded rather than counted as 1.0.
-Mask IoU captures shape and spatial overlap that centroid-based trajectory
-metrics cannot -- a correct centroid with the wrong object boundary still
-scores poorly.
+$$
+\mathrm{MaskIoU} = \frac{1}{|\mathcal{T}|} \sum_{t \in \mathcal{T}} \mathrm{IoU}_t
+$$
+
+$M_t^{\mathrm{pred}}$ and $M_t^{\mathrm{ref}}$ are the two masks at frame $t$;
+$\cap$ counts shared pixels, $\cup$ counts pixels covered by either mask, and
+$\mathcal{T}$ contains this object's scored frames. The case score averages
+the available per-object scores.
+
+For example, **5,000 shared pixels / 15,000 covered pixels** gives an IoU of
+**0.33**. A score of **0** means no overlap; **1** means identical masks.
+This captures absolute position and object boundaries that displacement alone
+cannot assess.
+
+Both masks are checked for plausible area (0.3–3.0 times the source clip's
+median mask area for that object); rejected masks are treated as absent.
+One valid nonempty mask scores 0; neither side having one excludes the frame.
+If no comparable frames remain, the object's score is unavailable.
 
 See [eval/README.md](eval/README.md) for more details on tracking, seeding,
 and per-object scoring.
