@@ -16,6 +16,14 @@ The benchmark data (videos, ground-truth trajectories, edit manifests) is
 hosted on Hugging Face:
 [ccmoony/PCVE-RigidBench](https://huggingface.co/datasets/ccmoony/PCVE-RigidBench).
 
+## Qualitative Cases
+
+Each case pairs the same source scene with a controlled intervention and its
+physically simulated counterfactual. The examples below cover every supported
+edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
+
+![PCVE-RigidBench qualitative cases](docs/assets/benchmark_gallery.jpg)
+
 ## Repository Layout
 
 ```
@@ -83,6 +91,14 @@ pip install -r requirements.txt
 
 For model-specific dependencies (e.g. Wan VACE, Ditto, VOID), see
 [eval/README.md](eval/README.md).
+
+### Evaluated Models
+
+| Model | Reference | Scope in this benchmark |
+|-------|-----------|-------------------------|
+| Wan 2.1 VACE-14B | [VACE: All-in-One Video Creation and Editing (ICCV 2025)](https://arxiv.org/abs/2503.07598) | SET, ADD, and DELETE edits |
+| Ditto / Editto | [Scaling Instruction-Based Video Editing with a High-Quality Synthetic Dataset (CVPR 2026)](https://arxiv.org/abs/2510.15742) | SET, ADD, and DELETE edits |
+| VOID | [VOID: Video Object and Interaction Deletion (ECCV 2026)](https://arxiv.org/abs/2604.02296) | DELETE edits only |
 
 ### Run a baseline
 
