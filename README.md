@@ -23,35 +23,71 @@ physically simulated counterfactual. The examples below cover every supported
 edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 
 <table>
-<tr><td colspan="2" align="center"><b>Mass</b> · <code>SET pins.mass TIMES 25</code> — pins remain upright</td></tr>
 <tr>
-<td align="center">Source<br><video src="docs/assets/videos/bowling_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
-<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/bowling_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<th colspan="2">🎳 Mass · <code>SET pins.mass TIMES 25</code> — pins remain upright</th>
 </tr>
-<tr><td colspan="2" align="center"><b>Friction</b> · <code>SET ball.friction TIMES 0.3</code> — crosses the rug</td></tr>
 <tr>
-<td align="center">Source<br><video src="docs/assets/videos/ball_carpet_climb_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
-<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/ball_carpet_climb_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center"><b>Source</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bowling_source.mp4" controls muted width="400"></video>
+</td>
+<td align="center"><b>Edited Ground Truth</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bowling_edited.mp4" controls muted width="400"></video>
+</td>
 </tr>
-<tr><td colspan="2" align="center"><b>Restitution</b> · <code>SET ball.restitution TIMES 1.2</code></td></tr>
 <tr>
-<td align="center">Source<br><video src="docs/assets/videos/bouncing_ball_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
-<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/bouncing_ball_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<th colspan="2">🧊 Friction · <code>SET ball.friction TIMES 0.3</code> — crosses the rug</th>
 </tr>
-<tr><td colspan="2" align="center"><b>Initial velocity</b> · <code>SET can.initial_velocity TIMES 0.25</code> — chain never starts</td></tr>
 <tr>
-<td align="center">Source<br><video src="docs/assets/videos/dining_chain_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
-<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/dining_chain_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center"><b>Source</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/ball_carpet_climb_source.mp4" controls muted width="400"></video>
+</td>
+<td align="center"><b>Edited Ground Truth</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/ball_carpet_climb_edited.mp4" controls muted width="400"></video>
+</td>
 </tr>
-<tr><td colspan="2" align="center"><b>ADD</b> · <code>ADD blue_stone BETWEEN red_stone AND yellow_stone AT MIDPOINT</code></td></tr>
 <tr>
-<td align="center">Source<br><video src="docs/assets/videos/curling_collision_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
-<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/curling_collision_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<th colspan="2">🏀 Restitution · <code>SET ball.restitution TIMES 1.2</code></th>
 </tr>
-<tr><td colspan="2" align="center"><b>DELETE</b> · <code>DELETE domino_2</code></td></tr>
 <tr>
-<td align="center">Source<br><video src="docs/assets/videos/domino_chain_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
-<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/domino_chain_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center"><b>Source</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bouncing_ball_source.mp4" controls muted width="400"></video>
+</td>
+<td align="center"><b>Edited Ground Truth</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bouncing_ball_edited.mp4" controls muted width="400"></video>
+</td>
+</tr>
+<tr>
+<th colspan="2">💨 Initial velocity · <code>SET can.initial_velocity TIMES 0.25</code> — chain never starts</th>
+</tr>
+<tr>
+<td align="center"><b>Source</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/dining_chain_source.mp4" controls muted width="400"></video>
+</td>
+<td align="center"><b>Edited Ground Truth</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/dining_chain_edited.mp4" controls muted width="400"></video>
+</td>
+</tr>
+<tr>
+<th colspan="2">🥌 ADD · <code>ADD blue_stone BETWEEN red_stone AND yellow_stone AT MIDPOINT</code></th>
+</tr>
+<tr>
+<td align="center"><b>Source</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/curling_collision_source.mp4" controls muted width="400"></video>
+</td>
+<td align="center"><b>Edited Ground Truth</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/curling_collision_edited.mp4" controls muted width="400"></video>
+</td>
+</tr>
+<tr>
+<th colspan="2">🧱 DELETE · <code>DELETE domino_2</code></th>
+</tr>
+<tr>
+<td align="center"><b>Source</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/domino_chain_source.mp4" controls muted width="400"></video>
+</td>
+<td align="center"><b>Edited Ground Truth</b><br>
+<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/domino_chain_edited.mp4" controls muted width="400"></video>
+</td>
 </tr>
 </table>
 
