@@ -22,7 +22,38 @@ Each case pairs the same source scene with a controlled intervention and its
 physically simulated counterfactual. The examples below cover every supported
 edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 
-![PCVE-RigidBench qualitative cases](docs/assets/benchmark_gallery.jpg)
+<table>
+<tr><td colspan="2" align="center"><b>Mass</b> · <code>SET pins.mass TIMES 25</code> — pins remain upright</td></tr>
+<tr>
+<td align="center">Source<br><video src="docs/assets/videos/bowling_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/bowling_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+</tr>
+<tr><td colspan="2" align="center"><b>Friction</b> · <code>SET ball.friction TIMES 0.3</code> — crosses the rug</td></tr>
+<tr>
+<td align="center">Source<br><video src="docs/assets/videos/ball_carpet_climb_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/ball_carpet_climb_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+</tr>
+<tr><td colspan="2" align="center"><b>Restitution</b> · <code>SET ball.restitution TIMES 1.2</code></td></tr>
+<tr>
+<td align="center">Source<br><video src="docs/assets/videos/bouncing_ball_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/bouncing_ball_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+</tr>
+<tr><td colspan="2" align="center"><b>Initial velocity</b> · <code>SET can.initial_velocity TIMES 0.25</code> — chain never starts</td></tr>
+<tr>
+<td align="center">Source<br><video src="docs/assets/videos/dining_chain_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/dining_chain_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+</tr>
+<tr><td colspan="2" align="center"><b>ADD</b> · <code>ADD blue_stone BETWEEN red_stone AND yellow_stone AT MIDPOINT</code></td></tr>
+<tr>
+<td align="center">Source<br><video src="docs/assets/videos/curling_collision_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/curling_collision_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+</tr>
+<tr><td colspan="2" align="center"><b>DELETE</b> · <code>DELETE domino_2</code></td></tr>
+<tr>
+<td align="center">Source<br><video src="docs/assets/videos/domino_chain_source.mp4" autoplay loop muted playsinline width="100%"></video></td>
+<td align="center">Edited Ground Truth<br><video src="docs/assets/videos/domino_chain_edited.mp4" autoplay loop muted playsinline width="100%"></video></td>
+</tr>
+</table>
 
 ## Repository Layout
 
@@ -130,14 +161,26 @@ predictions/wan_vace_14b/
 | Category | Metrics |
 |----------|---------|
 | Perceptual | PSNR, SSIM, LPIPS, CLIP similarity, FVD |
-| Physics | Trajectory displacement (`disp`), Gap Closed (`gap_closed`), Mask IoU (`mask_iou`) |
+| Physics | Trajectory displacement (`disp`) ★, Gap Closed (`gap_closed`) ★, Mask IoU (`mask_iou`) |
+
+★ **New in this benchmark.** Existing video-editing benchmarks evaluate
+appearance only. To measure whether the edited motion matches the intended
+physical change, we design two trajectory-level metrics:
+
+- **Trajectory Displacement** tracks every object in both the prediction and
+  the edited ground truth with GroundedSAM2, aligns the two centroid paths at
+  an anchor frame to cancel the origin-vs-centroid bias from rotation, and
+  reports per-frame displacement error.
+- **Gap Closed** normalises the displacement against a *null baseline* (copying
+  the source clip unchanged), giving a scale-free score comparable across edits
+  of very different magnitudes.
 
 The three physics metrics answer different questions:
 
 | Metric | What it tells you | Better |
 |--------|------------------|--------|
-| **Trajectory Displacement** | Does the object move as it should after the edit? | ↓ Lower; 0 is perfect motion |
-| **Gap Closed** | How much error is removed compared with copying the unedited source? | ↑ Higher; 1 is perfect, 0 is baseline |
+| **Trajectory Displacement** ★ | Does the object move as it should after the edit? | ↓ Lower; 0 is perfect motion |
+| **Gap Closed** ★ | How much error is removed compared with copying the unedited source? | ↑ Higher; 1 is perfect, 0 is baseline |
 | **Mask IoU** | Does the object occupy the right pixels, with the right boundary? | ↑ Higher; 1 is identical masks |
 
 #### Trajectory Displacement
