@@ -28,10 +28,10 @@ edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 </tr>
 <tr>
 <td align="center"><b>Source</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bowling_source.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/32b5fc7e-1192-4a63-ba36-62c6d31256ba" controls muted width="400"></video>
 </td>
 <td align="center"><b>Edited Ground Truth</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bowling_edited.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/cd7ae6ff-4038-4c04-8ea6-2608aae2c3de" controls muted width="400"></video>
 </td>
 </tr>
 <tr>
@@ -39,10 +39,10 @@ edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 </tr>
 <tr>
 <td align="center"><b>Source</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/ball_carpet_climb_source.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/f6766190-49fc-4446-bd53-4771725f52dd" controls muted width="400"></video>
 </td>
 <td align="center"><b>Edited Ground Truth</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/ball_carpet_climb_edited.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/fd27aeb6-e311-4922-b138-44118881cb26" controls muted width="400"></video>
 </td>
 </tr>
 <tr>
@@ -50,10 +50,10 @@ edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 </tr>
 <tr>
 <td align="center"><b>Source</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bouncing_ball_source.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/17ec37cd-1061-41f4-890d-b476394de71a" controls muted width="400"></video>
 </td>
 <td align="center"><b>Edited Ground Truth</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/bouncing_ball_edited.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/27d706c2-68f9-4348-9276-63a7cad0b8f6" controls muted width="400"></video>
 </td>
 </tr>
 <tr>
@@ -61,10 +61,10 @@ edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 </tr>
 <tr>
 <td align="center"><b>Source</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/dining_chain_source.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/ad76cd76-a1cd-470d-92d1-978d99f73925" controls muted width="400"></video>
 </td>
 <td align="center"><b>Edited Ground Truth</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/dining_chain_edited.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/3defe394-b572-40ad-9ef0-6652cb8ce168" controls muted width="400"></video>
 </td>
 </tr>
 <tr>
@@ -72,10 +72,10 @@ edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 </tr>
 <tr>
 <td align="center"><b>Source</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/curling_collision_source.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/8b85bf5e-ae67-4c33-b2dc-d0e7e455a0fd" controls muted width="400"></video>
 </td>
 <td align="center"><b>Edited Ground Truth</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/curling_collision_edited.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/21786357-f193-4431-8951-04fe8f4cb652" controls muted width="400"></video>
 </td>
 </tr>
 <tr>
@@ -83,10 +83,10 @@ edit type: mass, friction, restitution, initial velocity, ADD, and DELETE.
 </tr>
 <tr>
 <td align="center"><b>Source</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/domino_chain_source.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/bbec6dd6-c90c-4380-b207-bdb8716c2e4b" controls muted width="400"></video>
 </td>
 <td align="center"><b>Edited Ground Truth</b><br>
-<video src="https://github.com/Hammour-steak/PCVE-RigidBench/raw/main/docs/assets/videos/domino_chain_edited.mp4" controls muted width="400"></video>
+<video src="https://github.com/user-attachments/assets/f092139b-5d1c-4d23-8d32-b51f59a3f87c" controls muted width="400"></video>
 </td>
 </tr>
 </table>
